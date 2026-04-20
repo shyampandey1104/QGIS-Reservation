@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "road_flyovers",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "fly_name": "BHAYANDAR FLYOVER", "landmark": "GOLDEN NEST CIRCLE", "authority": "03", "traffic": "02", "length": 651.0, "width": 19.0, "Remark": null, "SHAPE_Leng": null }, "geometry": { "type": "LineString", "coordinates": [ [ 72.857509149386203, 19.295551776704325 ], [ 72.856109565339494, 19.295435374128004 ], [ 72.854542405912852, 19.295287781710147 ], [ 72.853675038705106, 19.295198390484469 ], [ 72.852598074411887, 19.295103520872598 ], [ 72.851316564883561, 19.294970516739163 ], [ 72.851188356914918, 19.294963456213928 ] ] } }
+]
+}

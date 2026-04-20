@@ -1,0 +1,13 @@
+{
+"type": "FeatureCollection",
+"name": "railway_underpasses",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "Rail_Route": "MIRA ROAD TO BHAYANDAR", "unp_name": "MIRA  BHAYANDAR FLYOVER UNDERPASS", "unp_type": "01", "authority": "03", "traffic": "02", "length": 340.0, "width": 39.0, "Remark": null, "SHAPE_Leng": null }, "geometry": { "type": "LineString", "coordinates": [ [ 72.854355667650267, 19.29377039434965 ], [ 72.853961139544694, 19.296797887303082 ] ] } },
+{ "type": "Feature", "properties": { "Rail_Route": "MIRA ROAD TO BHAYANDAR", "unp_name": "MIRA BHAYANDAR FLYOVER UNDERPASS", "unp_type": "01", "authority": "03", "traffic": "02", "length": 340.0, "width": 39.0, "Remark": null, "SHAPE_Leng": null }, "geometry": { "type": "LineString", "coordinates": [ [ 72.854399334557485, 19.293779133876448 ], [ 72.854008703139939, 19.296800660466552 ] ] } },
+{ "type": "Feature", "properties": { "Rail_Route": "MIRA ROAD TO BHAYANDAR", "unp_name": "MIRA BHAYANDAR FLYOVER UNDERPASS", "unp_type": "01", "authority": "03", "traffic": "02", "length": 340.0, "width": 39.0, "Remark": null, "SHAPE_Leng": null }, "geometry": { "type": "LineString", "coordinates": [ [ 72.854453573457562, 19.293791306384865 ], [ 72.854066726800212, 19.296805237960154 ] ] } },
+{ "type": "Feature", "properties": { "Rail_Route": "MIRA ROAD TO BHAYANDAR", "unp_name": "MIRA BHAYANDAR FLYOVER UNDERPASS", "unp_type": "01", "authority": "03", "traffic": "02", "length": 340.0, "width": 39.0, "Remark": null, "SHAPE_Leng": null }, "geometry": { "type": "LineString", "coordinates": [ [ 72.854493809802605, 19.293800258783968 ], [ 72.854126521834544, 19.296810523326055 ] ] } },
+{ "type": "Feature", "properties": { "Rail_Route": "MIRA ROAD TO BHAYANDAR", "unp_name": "MIRA BHAYANDAR FLYOVER UNDERPASS", "unp_type": "01", "authority": "03", "traffic": "02", "length": 340.0, "width": 39.0, "Remark": null, "SHAPE_Leng": null }, "geometry": { "type": "LineString", "coordinates": [ [ 72.854574394615071, 19.293819792225925 ], [ 72.854168491053812, 19.29680710110501 ] ] } },
+{ "type": "Feature", "properties": { "Rail_Route": "MIRA ROAD TO BHAYANDAR", "unp_name": "MIRA BHAYANDAR FLYOVER UNDERPASS", "unp_type": "01", "authority": "03", "traffic": "02", "length": 340.0, "width": 39.0, "Remark": null, "SHAPE_Leng": null }, "geometry": { "type": "LineString", "coordinates": [ [ 72.854622243253019, 19.29386425598986 ], [ 72.854284538390687, 19.296816255974676 ] ] } }
+]
+}

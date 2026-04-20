@@ -1,0 +1,299 @@
+{
+ "actions": [],
+ "autoname": "GIS-PROJ-.#####",
+ "creation": "2025-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "project_name",
+  "road_name",
+  "ward",
+  "project_type",
+  "status",
+  "submitted_by_role",
+  "col_break_1",
+  "budget",
+  "road_length",
+  "start_date",
+  "completion_date",
+  "section_break_attribs",
+  "road_no",
+  "road_type",
+  "pave_type",
+  "landmark",
+  "dma_no",
+  "ward_no",
+  "col_break_attribs",
+  "authority",
+  "traffic",
+  "width",
+  "shape_length",
+  "unp_name",
+  "unp_type",
+  "section_break_extra",
+  "junc_name",
+  "facility",
+  "rail_route",
+  "bridg_name",
+  "bridg_type",
+  "fly_name",
+  "section_break_1",
+  "description",
+  "contractor_details",
+  "remarks",
+  "section_break_2",
+  "geometry"
+ ],
+ "fields": [
+  {
+   "fieldname": "project_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Project Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "road_name",
+   "fieldtype": "Small Text",
+   "label": "Road Name"
+  },
+  {
+   "fieldname": "ward",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Ward / Zone",
+   "reqd": 1
+  },
+  {
+   "fieldname": "project_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Project Type"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nSubmitted\nApproved\nRejected",
+   "default": "Draft"
+  },
+  {
+   "fieldname": "submitted_by_role",
+   "fieldtype": "Data",
+   "label": "Submitted By Role",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "budget",
+   "fieldtype": "Data",
+   "label": "Estimated Budget (INR)"
+  },
+  {
+   "fieldname": "road_length",
+   "fieldtype": "Data",
+   "label": "Road Length / Area"
+  },
+  {
+   "fieldname": "start_date",
+   "fieldtype": "Date",
+   "label": "Start Date"
+  },
+  {
+   "fieldname": "completion_date",
+   "fieldtype": "Date",
+   "label": "Expected Completion Date"
+  },
+  {
+   "fieldname": "section_break_attribs",
+   "fieldtype": "Section Break",
+   "label": "GIS Attributes"
+  },
+  {
+   "fieldname": "road_no",
+   "fieldtype": "Data",
+   "label": "Road No"
+  },
+  {
+   "fieldname": "road_type",
+   "fieldtype": "Data",
+   "label": "Road Type"
+  },
+  {
+   "fieldname": "pave_type",
+   "fieldtype": "Data",
+   "label": "Pave Type"
+  },
+  {
+   "fieldname": "landmark",
+   "fieldtype": "Small Text",
+   "label": "Landmark"
+  },
+  {
+   "fieldname": "dma_no",
+   "fieldtype": "Data",
+   "label": "DMA No"
+  },
+  {
+   "fieldname": "ward_no",
+   "fieldtype": "Data",
+   "label": "Ward No"
+  },
+  {
+   "fieldname": "col_break_attribs",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "authority",
+   "fieldtype": "Data",
+   "label": "Authority"
+  },
+  {
+   "fieldname": "traffic",
+   "fieldtype": "Data",
+   "label": "Traffic"
+  },
+  {
+   "fieldname": "width",
+   "fieldtype": "Data",
+   "label": "Width"
+  },
+  {
+   "fieldname": "shape_length",
+   "fieldtype": "Data",
+   "label": "SHAPE Length"
+  },
+  {
+   "fieldname": "unp_name",
+   "fieldtype": "Small Text",
+   "label": "UNP Name"
+  },
+  {
+   "fieldname": "unp_type",
+   "fieldtype": "Data",
+   "label": "UNP Type"
+  },
+  {
+   "fieldname": "section_break_extra",
+   "fieldtype": "Section Break",
+   "label": "Additional GIS Info"
+  },
+  {
+   "fieldname": "junc_name",
+   "fieldtype": "Small Text",
+   "label": "Junction Name"
+  },
+  {
+   "fieldname": "facility",
+   "fieldtype": "Data",
+   "label": "Facility"
+  },
+  {
+   "fieldname": "rail_route",
+   "fieldtype": "Small Text",
+   "label": "Rail Route"
+  },
+  {
+   "fieldname": "bridg_name",
+   "fieldtype": "Small Text",
+   "label": "Bridge Name"
+  },
+  {
+   "fieldname": "bridg_type",
+   "fieldtype": "Data",
+   "label": "Bridge Type"
+  },
+  {
+   "fieldname": "fly_name",
+   "fieldtype": "Small Text",
+   "label": "Flyover Name"
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "contractor_details",
+   "fieldtype": "Text",
+   "label": "Contractor Details"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Text",
+   "label": "Remarks"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break",
+   "label": "Geometry"
+  },
+  {
+   "fieldname": "geometry",
+   "fieldtype": "Long Text",
+   "label": "Polygon Geometry (GeoJSON)"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-04-09 13:10:00.000000",
+ "modified_by": "Administrator",
+ "module": "QGIS",
+ "name": "GIS Project",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "GIS Junior Engineer",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "GIS Assistant Engineer",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "GIS Senior Engineer",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "GIS Department Head",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Guest"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
