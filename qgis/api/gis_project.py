@@ -231,12 +231,12 @@ def _serialize(p, geometry, wo=None, fetch_wo_if_none=True):
 
     # Dynamic project journey stages definition
     res["stages"] = [
-        {"status": "Approved", "label": "Approved", "icon": "📋", "color": "#16a34a"},
-        {"status": "Work Started", "label": "Work Started", "icon": "🔨", "color": "#2563eb"},
-        {"status": "Ongoing", "label": "Ongoing", "icon": "⚙️", "color": "#7c3aed"},
-        {"status": "Hold", "label": "On Hold", "icon": "⏸", "color": "#ef4444"},
-        {"status": "Near Completion", "label": "Near Completion", "icon": "🏁", "color": "#0891b2"},
-        {"status": "Completed", "label": "Completed", "icon": "✅", "color": "#16a34a"}
+        {"status": "Approved",        "label": "Approved",        "icon": "📋", "color": "#16a34a"},
+        {"status": "Work Started",    "label": "Work Started",    "icon": "🔨", "color": "#16a34a"},
+        {"status": "Ongoing",         "label": "Ongoing",         "icon": "⚙️", "color": "#16a34a"},
+        {"status": "On Hold",         "label": "On Hold",         "icon": "⏸",  "color": "#16a34a"},
+        {"status": "Near Completion", "label": "Near Completion", "icon": "🏁", "color": "#16a34a"},
+        {"status": "Completed",       "label": "Completed",       "icon": "✅", "color": "#14532d"},
     ]
 
     return res

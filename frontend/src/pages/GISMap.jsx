@@ -6,16 +6,17 @@ import 'leaflet-draw'
 import { fetchProjects, createProject, deleteProject, manualUpload, updateCustomAttributes, submitWorkOrder, addTimelineEntry } from '../api'
 
 const STATUS_COLORS = {
-  Draft: { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' },
-  Submitted: { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
-  Approved: { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
-  Rejected: { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  Draft:                 { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' },
+  Submitted:             { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
+  Approved:              { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Rejected:              { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
   'Pending for Request': { bg: '#fef3c7', color: '#d97706', border: '#fde68a' },
-  'Work Started': { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
-  Ongoing: { bg: '#f5f3ff', color: '#7c3aed', border: '#ddd6fe' },
-  Hold: { bg: '#fff5f5', color: '#e53e3e', border: '#fed7d7' },
-  'Near Completion': { bg: '#ecfeff', color: '#0891b2', border: '#cffafe' },
-  Completed: { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }
+  'Work Started':        { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Ongoing:               { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  'On Hold':             { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Hold:                  { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green (legacy key)
+  'Near Completion':     { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Completed:             { bg: '#dcfce7', color: '#14532d', border: '#86efac' }, // Dark Green
 }
 
 const LAYER_META = {
@@ -370,11 +371,12 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
       if (p.status === 'Pending for Request') {
         color = '#f97316' // Vibrant Orange for pending features
       } else {
-        // If it is a custom color (not one of the default blues), respect it 100%!
         const isDefaultColor = !p.color || p.color.toLowerCase() === '#1a73e8' || p.color.toLowerCase() === '#2563eb' || p.color.toLowerCase() === '#2c3e50';
         if (isDefaultColor) {
-          if (p.status === 'Submitted' || p.status === 'Approved') {
-            color = '#10b981' // Premium Emerald Green for approved features
+          if (p.status === 'Completed') {
+            color = '#14532d' // Dark Green for completed
+          } else if (['Submitted', 'Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion'].includes(p.status)) {
+            color = '#16a34a' // Green for approved & all post-approval statuses
           }
         }
       }

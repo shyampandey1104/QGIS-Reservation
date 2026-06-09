@@ -9,6 +9,12 @@ const STATUS_COLORS = {
   Approved:              { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
   Rejected:              { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' }, // Red
   Cancelled:             { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' }, // Grey
+  'Work Started':        { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Ongoing:               { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  'On Hold':             { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Hold:                  { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  'Near Completion':     { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Completed:             { bg: '#dcfce7', color: '#14532d', border: '#86efac' }, // Dark Green
 }
 
 const ROLE_ACTIONS = {

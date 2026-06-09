@@ -14,6 +14,12 @@ const STATUS_COLORS = {
   Submitted:             { bg: '#eff6ff', color: '#2563eb' }, // Blue
   Approved:              { bg: '#f0fdf4', color: '#16a34a' }, // Green
   Rejected:              { bg: '#fef2f2', color: '#dc2626' }, // Red
+  'Work Started':        { bg: '#f0fdf4', color: '#16a34a' }, // Green
+  Ongoing:               { bg: '#f0fdf4', color: '#16a34a' }, // Green
+  'On Hold':             { bg: '#f0fdf4', color: '#16a34a' }, // Green
+  Hold:                  { bg: '#f0fdf4', color: '#16a34a' }, // Green
+  'Near Completion':     { bg: '#f0fdf4', color: '#16a34a' }, // Green
+  Completed:             { bg: '#dcfce7', color: '#14532d' }, // Dark Green
 }
 
 const POLYGON_COLORS = {
@@ -23,6 +29,12 @@ const POLYGON_COLORS = {
   Submitted:             '#ea580c', // Orange
   Approved:              '#16a34a', // Green
   Rejected:              '#dc2626', // Red
+  'Work Started':        '#16a34a', // Green
+  Ongoing:               '#16a34a', // Green
+  'On Hold':             '#16a34a', // Green
+  Hold:                  '#16a34a', // Green
+  'Near Completion':     '#16a34a', // Green
+  Completed:             '#14532d', // Dark Green
 }
 
 // Which status actions each role can take
