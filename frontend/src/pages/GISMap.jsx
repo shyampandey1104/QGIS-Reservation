@@ -3,148 +3,338 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import 'leaflet-draw'
-import { fetchProjects, createProject, updateStatus, deleteProject, updateGeometry, fetchNearbyPlaces, searchExternalLocations } from '../api'
-
-// Color palette for dynamic layers
-const DYNAMIC_COLORS = [
-  '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#d35400', 
-  '#27ae60', '#2980b9', '#8e44ad', '#f1c40f', '#c0392b'
-]
-
-const getLayerColor = (type, index) => DYNAMIC_COLORS[index % DYNAMIC_COLORS.length]
+import { fetchProjects, createProject, deleteProject, manualUpload, updateCustomAttributes, submitWorkOrder, addTimelineEntry } from '../api'
 
 const STATUS_COLORS = {
-  Draft:     { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' },
+  Draft: { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' },
   Submitted: { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
-  Approved:  { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
-  Rejected:  { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  Approved: { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+  Rejected: { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  'Pending for Request': { bg: '#fef3c7', color: '#d97706', border: '#fde68a' },
+  'Work Started': { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
+  Ongoing: { bg: '#f5f3ff', color: '#7c3aed', border: '#ddd6fe' },
+  Hold: { bg: '#fff5f5', color: '#e53e3e', border: '#fed7d7' },
+  'Near Completion': { bg: '#ecfeff', color: '#0891b2', border: '#cffafe' },
+  Completed: { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }
 }
 
-const ROLE_ACTIONS = {
-  'GIS Junior Engineer':    { canCreate: true,  nextStatus: ['Submitted'] },
-  'GIS Assistant Engineer': { canCreate: true,  nextStatus: ['Approved', 'Rejected'] },
-  'GIS Senior Engineer':    { canCreate: true,  nextStatus: ['Approved', 'Rejected'] },
-  'GIS Department Head':    { canCreate: true,  nextStatus: ['Approved', 'Rejected'] },
-  'System Manager':         { canCreate: true,  nextStatus: ['Draft', 'Submitted', 'Approved', 'Rejected'] },
+const LAYER_META = {
+  Chambers_Manhole: { color: '#e74c3c' },
+  Drainage: { color: '#3498db' },
+  Pipeline_Network: { color: '#2ecc71' },
+  Railway_Underpass: { color: '#f39c12' },
+  Raw_Water_Station: { color: '#9b59b6' },
+  Road: { color: '#2c3e50' },
+  Road_Bridge: { color: '#1abc9c' },
+  Road_Flyover: { color: '#16a085' },
+  Road_Underpass: { color: '#d35400' },
+  Sewage_Treatment_Plant: { color: '#7f8c8d' },
+  Sewer_Pipeline_Network: { color: '#c0392b' },
+  Sewerage_Collection_Point: { color: '#2980b9' },
+  Storage_Tank: { color: '#27ae60' },
+  Treatment_Plant: { color: '#f1c40f' },
+  Water_Source: { color: '#8e44ad' }
 }
 
-const EMPTY_FORM = {
-  name: '', road_name: '', ward: '', type: 'Road Construction', description: '',
-  budget: '', road_length: '', contractor_details: '',
-  start_date: '', completion_date: '', remarks: '',
-  road_no: '', road_type: '', pave_type: '', landmark: '', 
-  authority: '', traffic: '', width: '', shape_length: '',
-  unp_name: '', unp_type: ''
+const cleanCoords = (coords) => {
+  if (!Array.isArray(coords)) return null;
+  if (coords.length >= 2 && typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+    return [coords[0], coords[1]];
+  }
+  const cleaned = coords.map(cleanCoords).filter(Boolean);
+  return cleaned.length > 0 ? cleaned : null;
 }
 
-export default function GISMap({ userInfo }) {
+const STANDARD_KEYS = ['id', 'name', 'type', 'ward', 'status', 'road_name', 'road_no', 'road_type', 'pave_type', 'landmark', 'authority', 'traffic', 'width', 'shape_length', 'unp_name', 'unp_type', 'dma_no', 'ward_no', 'junc_name', 'facility', 'rail_route', 'bridg_name', 'bridg_type', 'fly_name', 'description', 'remarks', 'coordinates', 'color', 'geom_type', 'created_at', 'modified', 'owner', 'docstatus', 'approver', 'custom_attributes', 'timeline', 'stages'];
+
+export default function GISMap({ userInfo, requestTrigger, liveFilterActive, setLiveFilterActive }) {
   const mapRef = useRef(null)
+  const fileInputRef = useRef(null)
   const mapInstanceRef = useRef(null)
+  const mainGroupRef = useRef(null)
   const drawnLayersRef = useRef(null)
-  const nearbyLayersRef = useRef(null)
-  const layerGroupsRef = useRef({})
-  const [projects, setProjects] = useState([])
-  const [form, setForm] = useState(EMPTY_FORM)
-  const [pendingGeometry, setPendingGeometry] = useState(null)
-  const [showForm, setShowForm] = useState(false)
-  const [selectedProject, setSelectedProject] = useState(null)
-  const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const drawControlRef = useRef(null)
+  const categoryGroupsRef = useRef({}) // Store groups by type: { 'Road': L.FeatureGroup, ... }
 
-  // UI panels
-  const [showLayers, setShowLayers] = useState(true)
-  const [showAttributeTable, setShowAttributeTable] = useState(false)
-  const [attrFilter, setAttrFilter] = useState('')
-  const [selectedLayerStats, setSelectedLayerStats] = useState(null)
-  const [isEditingShape, setIsEditingShape] = useState(false)
-  const [mouseCoords, setMouseCoords] = useState({ lat: 0, lng: 0 })
-  const [mapZoom, setMapZoom] = useState(13)
-  const [showSideResults, setShowSideResults] = useState(false)
-
-  // Nearby POI state
-  const [nearbyPOIs, setNearbyPOIs] = useState([])
-  const [nearbyRadius, setNearbyRadius] = useState(1000)
-  const [nearbyType, setNearbyType] = useState('')
-  const [isSearchingNearby, setIsSearchingNearby] = useState(false)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [isSearchFocused, setIsSearchFocused] = useState(false)
-  const [externalResults, setExternalResults] = useState([])
-  const [selectedLocation, setSelectedLocation] = useState(null) // For external geocoded locations
-  const [activeTab, setActiveTab] = useState('Explore')
-  const [recentProjects, setRecentProjects] = useState(() => {
-    try {
-      const saved = localStorage.getItem('gis_recentProjects')
-      return saved ? JSON.parse(saved) : []
-    } catch (e) {
-      return []
+  const [projects, setProjects] = useState(() => {
+    const cached = localStorage.getItem('gis_projects_light');
+    if (cached) {
+      try { return JSON.parse(cached); } catch(e) {}
     }
+    return [];
   })
-  const [mapMode, setMapMode] = useState(localStorage.getItem('gis_mapMode') || 'default')
+  const [showLayers, setShowLayers] = useState(false)
+  const [mapMode, setMapMode] = useState('satellite')
   const [layerVisibility, setLayerVisibility] = useState(() => {
-    try {
-      const saved = localStorage.getItem('gis_layerVisibility')
-      return saved ? JSON.parse(saved) : {}
-    } catch (e) {
-      return {}
+    const saved = localStorage.getItem('gis_layer_vis');
+    if (saved) {
+      try { return JSON.parse(saved); } catch(e) {}
     }
+    return {};
   })
-
-  // Derived dynamic project types
-  const dynamicProjectTypes = Array.from(new Set(projects.map(p => p.type))).sort()
   
-  // Initialize visibility for new types
   useEffect(() => {
-    setLayerVisibility(prev => {
-        const next = { ...prev }
-        dynamicProjectTypes.forEach(t => {
-            if (next[t] === undefined) next[t] = true
-        })
-        return next
+    localStorage.setItem('gis_layer_vis', JSON.stringify(layerVisibility));
+  }, [layerVisibility]);
+
+  const [selectedProject, setSelectedProject] = useState(null)
+  const [showForm, setShowForm] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(null)
+  const [showInitiatePopup, setShowInitiatePopup] = useState(false)
+  const [initiateComment, setInitiateComment] = useState('')
+  const [initiateAttachment, setInitiateAttachment] = useState(null)
+  const [initiateApprover, setInitiateApprover] = useState('')
+  const [activeStatusFilter, setActiveStatusFilter] = useState(null)
+  const [isEditing, setIsEditing] = useState(false)
+  const [customAlert, setCustomAlert] = useState(null)
+  const [showStatusTimelinePopup, setShowStatusTimelinePopup] = useState(false)
+  const [timelineStatus, setTimelineStatus] = useState('Work Started')
+  const [timelineDate, setTimelineDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [timelineComment, setTimelineComment] = useState('')
+  const [timelineImage, setTimelineImage] = useState(null)
+
+  const alert = (message, type = 'success') => {
+    let alertType = type;
+    const msgLower = String(message).toLowerCase();
+    if (msgLower.includes('failed') || msgLower.includes('error') || msgLower.includes('missing') || msgLower.includes('exception')) {
+      alertType = 'error';
+    }
+    setCustomAlert({ type: alertType, message: String(message) });
+  };
+
+  const isLayerVisible = (type) => {
+    // Return explicit visibility flag; default to false if not set
+    return !!layerVisibility[type];
+  };
+
+  const [drawnCoordinates, setDrawnCoordinates] = useState(null)
+  const [drawnGeomType, setDrawnGeomType] = useState('Polygon')
+  const [selectedColor, setSelectedColor] = useState('#1a73e8')
+
+  const [showAddField, setShowAddField] = useState(false)
+  const [newFieldLabel, setNewFieldLabel] = useState('')
+  const [newFieldValue, setNewFieldValue] = useState('')
+
+  // Optimized: Pre-calculate counts to avoid O(N) filtering in every render
+  const projectCounts = useMemo(() => {
+    const counts = {}
+    projects.forEach(p => {
+      counts[p.type] = (counts[p.type] || 0) + 1
     })
+    return counts
+  }, [projects])
+
+  useEffect(() => {
+    if (requestTrigger > 0) setShowForm(true)
+  }, [requestTrigger])
+
+  const dynamicProjectTypes = useMemo(() => {
+    return Array.from(new Set(projects.map(p => p.type).filter(Boolean))).sort()
+  }, [projects])
+
+  const loadProjects = async (overrideStatus) => {
+    const statusToFetch = overrideStatus !== undefined ? overrideStatus : activeStatusFilter;
+    try {
+      let isFullLoaded = false;
+      
+      // 1. Fetch lightweight project metadata first for instant sidebar rendering
+      fetchProjects(statusToFetch, null, true).then(lightweightData => {
+        if (!isFullLoaded && lightweightData) {
+          const parsedLightweight = lightweightData.map(p => ({
+            ...p,
+            coordinates: p.coordinates || []
+          }));
+          setProjects(parsedLightweight);
+          try {
+            const tinyCache = parsedLightweight.map(p => ({ type: p.type, status: p.status }));
+            localStorage.setItem('gis_projects_light', JSON.stringify(tinyCache));
+          } catch(err) {
+            console.warn("Storage quota exceeded, skipping cache.");
+          }
+        }
+      }).catch(e => console.error("Lightweight load failed:", e));
+
+      // 2. Fetch full projects with geometry to draw on map
+      const data = await fetchProjects(statusToFetch)
+      const parsedData = (data || []).map(p => {
+        let coords = p.coordinates
+        if (typeof coords === 'string') {
+          try { coords = JSON.parse(coords) } catch (e) { coords = [] }
+        }
+        return { ...p, coordinates: cleanCoords(coords) }
+      }).filter(p => p.coordinates)
+      
+      isFullLoaded = true;
+      setProjects(parsedData);
+    } catch (e) { console.error(e) }
+  }
+
+  useEffect(() => { loadProjects() }, [])
+
+  useEffect(() => {
+    if (projects.length > 0) {
+      const uniqueTypes = Array.from(new Set(projects.map(p => p.type)));
+      setLayerVisibility(prev => {
+        const updated = { ...prev };
+        let changed = false;
+        uniqueTypes.forEach(type => {
+          if (updated[type] === undefined) {
+            updated[type] = false;
+            changed = true;
+          }
+        });
+        return changed ? updated : prev;
+      });
+    }
   }, [projects]);
 
   useEffect(() => {
-    localStorage.setItem('gis_mapMode', mapMode)
-  }, [mapMode]);
-
-  useEffect(() => {
-    localStorage.setItem('gis_layerVisibility', JSON.stringify(layerVisibility))
-  }, [layerVisibility])
-
-  const role = userInfo?.role || ''
-  const roleActions = ROLE_ACTIONS[role] || {}
-
-  const loadProjects = () => {
-    setLoading(true)
-    fetchProjects()
-      .then(setProjects)
-      .catch(() => setProjects([]))
-      .finally(() => setLoading(false))
-  }
-
-  useEffect(() => { loadProjects() }, []);
-
-  useEffect(() => {
-    localStorage.setItem('gis_recentProjects', JSON.stringify(recentProjects.slice(0, 10)))
-  }, [recentProjects]);
-
-  // Track recents when project selected
-  useEffect(() => {
-    if (selectedProject) {
-      setRecentProjects(prev => {
-        const filtered = prev.filter(p => p.id === selectedProject.id)
-        if (filtered.length > 0) return prev
-        return [selectedProject, ...prev].slice(0, 10)
-      })
+    if (liveFilterActive !== undefined) {
+      const liveStatuses = 'Pending for Request,Approved,Submitted';
+      const newFilter = liveFilterActive ? liveStatuses : null;
+      setActiveStatusFilter(newFilter);
+      loadProjects(newFilter);
     }
-  }, [selectedProject]);
+  }, [liveFilterActive])
 
-  const projectsToDisplay = useMemo(() => {
-    if (activeTab === 'Saved') return projects.filter(p => p.status === 'Approved')
-    if (activeTab === 'Recents') return recentProjects
-    return projects
-  }, [activeTab, projects, recentProjects]);
+  // Initialize Map
+  useEffect(() => {
+    if (!mapRef.current || mapInstanceRef.current) return
 
+    const map = L.map(mapRef.current, {
+      zoomControl: false,
+      doubleClickZoom: false,
+      renderer: L.canvas({ padding: 0.5 }) // SIGNIFICANT PERFORMANCE BOOST for 10k+ features
+    }).setView([19.25, 72.85], 12)
+    mapInstanceRef.current = map
+
+    const layers = {
+      standard: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }),
+      satellite: L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { attribution: '© Google' }),
+      terrain: L.tileLayer('https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', { attribution: '© Google' })
+    }
+    layers.standard.addTo(map)
+    mapInstanceRef.current._baseLayers = layers
+
+    mainGroupRef.current = L.featureGroup().addTo(map)
+    drawnLayersRef.current = L.featureGroup().addTo(map)
+
+    const drawControl = new L.Control.Draw({
+      position: 'topright',
+      edit: {
+        featureGroup: drawnLayersRef.current,
+        remove: true,
+        allowIntersection: true
+      },
+      draw: {
+        polygon: {
+          allowIntersection: true,
+          showArea: true,
+          guidelineDistance: 15,
+          shapeOptions: { color: '#1a73e8', fillColor: '#1a73e8', fillOpacity: 0.65, weight: 4, clickable: true }
+        },
+        polyline: {
+          metric: true,
+          showLength: true,
+          shapeOptions: { color: '#1a73e8', weight: 5, opacity: 0.9 }
+        },
+        rectangle: {
+          allowIntersection: true,
+          shapeOptions: { color: '#1a73e8', fillColor: '#1a73e8', fillOpacity: 0.65, weight: 4 }
+        },
+        circle: false, circlemarker: false,
+        marker: {
+          icon: L.divIcon({
+            className: 'custom-div-icon',
+            html: `<div style='background-color:#1a73e8; width:14px; height:14px; border-radius:50%; border:3px solid white; box-shadow:0 0 10px rgba(0,0,0,0.3)'></div>`,
+            iconSize: [14, 14], iconAnchor: [7, 7]
+          })
+        }
+      }
+    })
+    // We don't add the drawControl toolbar to the map to keep the UI extremely clean,
+    // but we still keep it in reference so we can use its drawing options programmatically!
+    // map.addControl(drawControl)
+    drawControlRef.current = drawControl
+
+    map.on(L.Draw.Event.CREATED, (e) => {
+      const layer = e.layer
+      drawnLayersRef.current.addLayer(layer)
+
+      let coords = []
+      if (e.layerType === 'marker') {
+        const latlng = layer.getLatLng()
+        coords = [[latlng.lat, latlng.lng]]
+      } else {
+        const lls = layer.getLatLngs()
+        const flat = Array.isArray(lls[0]) ? lls[0] : lls
+        coords = flat.map(ll => [ll.lat, ll.lng])
+
+        // Auto-close Polygons if not already closed
+        if (e.layerType === 'polygon' || e.layerType === 'rectangle') {
+          if (coords.length > 2) {
+            const first = coords[0]
+            const last = coords[coords.length - 1]
+            if (first[0] !== last[0] || first[1] !== last[1]) {
+              coords.push([first[0], first[1]])
+            }
+          }
+        }
+      }
+
+      setDrawnGeomType(e.layerType === 'marker' ? 'Point' : e.layerType === 'polyline' ? 'LineString' : 'Polygon')
+      setDrawnCoordinates(coords)
+      setShowForm(true)
+    })
+
+    map.on(L.Draw.Event.EDITED, async (e) => {
+      const layers = e.layers
+      layers.eachLayer(async (layer) => {
+        // If it's an existing project, it should have a custom ID property
+        if (layer.projectId) {
+          let coords = []
+          if (layer instanceof L.Marker || layer instanceof L.CircleMarker) {
+            coords = [[layer.getLatLng().lat, layer.getLatLng().lng]]
+          } else {
+            const extractCoords = (item) => {
+              if (Array.isArray(item)) return item.map(extractCoords);
+              return item ? [item.lat, item.lng] : null;
+            };
+            coords = extractCoords(layer.getLatLngs());
+          }
+          try {
+            await updateGeometry(layer.projectId, coords)
+            alert("Geometry updated successfully!")
+            loadProjects()
+          } catch (err) { alert("Update failed: " + err.message) }
+        }
+      })
+    })
+
+    map.on(L.Draw.Event.DELETED, async (e) => {
+      const layers = e.layers
+      layers.eachLayer(async (layer) => {
+        if (layer.projectId) {
+          if (window.confirm("Delete this project from database?")) {
+            try {
+              await deleteProject(layer.projectId)
+              loadProjects()
+            } catch (err) { alert("Delete failed: " + err.message) }
+          }
+        }
+      })
+    })
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove()
+        mapInstanceRef.current = null
+      }
+    }
+  }, [])
+
+  // Sync Base Layers
   useEffect(() => {
     const map = mapInstanceRef.current
     if (!map || !map._baseLayers) return
@@ -153,922 +343,971 @@ export default function GISMap({ userInfo }) {
     selected.addTo(map)
   }, [mapMode])
 
-  // Initialize Map
-  useEffect(() => {
-    if (!mapRef.current) return
-    if (mapInstanceRef.current) return
-
-    const map = L.map(mapRef.current, { zoomControl: false }).setView([23.2599, 77.4126], 13)
-    mapInstanceRef.current = map
-
-    const layers = {
-      standard: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }),
-      satellite: L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { attribution: '© Google' }),
-      terrain: L.tileLayer('https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', { attribution: '© Google' })
-    }
-    
-    mapInstanceRef.current._baseLayers = layers
-    const initialLayer = layers[mapMode] || layers.standard
-    initialLayer.addTo(map)
-
-    const drawnItems = new L.FeatureGroup()
-    drawnLayersRef.current = drawnItems
-    map.addLayer(drawnItems)
-
-    const nearbyItems = new L.FeatureGroup()
-    nearbyLayersRef.current = nearbyItems
-    map.addLayer(nearbyItems)
-
-    if (roleActions.canCreate) {
-      const drawControl = new L.Control.Draw({
-        position: 'topright',
-        draw: {
-          polygon: { 
-            allowIntersection: false, 
-            showArea: true, 
-            shapeOptions: { color: '#1a73e8', fillOpacity: 0.3, weight: 3 } 
-          },
-          polyline: { 
-            shapeOptions: { color: '#1a73e8', weight: 4 },
-            showLength: true
-          },
-          rectangle: { shapeOptions: { color: '#1a73e8' } },
-          circle: false,
-          marker: { icon: new L.Icon.Default() },
-          circlemarker: false,
-        },
-        edit: { 
-          featureGroup: drawnItems,
-          remove: true
-        },
-      })
-      map.addControl(drawControl)
-
-      map.on(L.Draw.Event.CREATED, (e) => {
-        const { layer } = e
-        drawnItems.addLayer(layer)
-        let coords = extractCoords(layer)
-        setPendingGeometry(coords)
-        setForm({ ...EMPTY_FORM, type: 'Road Construction' })
-        setShowForm(true)
-      })
-
-      // When vertices are edited or deleted using Leaflet Draw tools
-      const updateCoords = () => {
-        const layer = drawnItems.getLayers()[0]
-        if (layer) setPendingGeometry(extractCoords(layer))
-      }
-      map.on(L.Draw.Event.EDITED, updateCoords)
-    }
-
-    map.on('mousemove', (e) => {
-      setMouseCoords({ lat: e.latlng.lat.toFixed(6), lng: e.latlng.lng.toFixed(6) })
-    })
-    map.on('zoomend', () => setMapZoom(map.getZoom()))
-
-    function extractCoords(layer) {
-      if (layer instanceof L.Polygon) {
-        return layer.getLatLngs()[0].map(ll => [ll.lat, ll.lng])
-      } else if (layer instanceof L.Polyline) {
-        return layer.getLatLngs().map(ll => [ll.lat, ll.lng])
-      }
-      return []
-    }
-
-    return () => {
-      map.remove()
-      mapInstanceRef.current = null
-    }
-  }, [roleActions.canCreate])
-
-  // Sync projects to map
+  // REFACTORED: Organize layers into groups by category for instant toggling
   useEffect(() => {
     const map = mapInstanceRef.current
-    if (!map) return
+    const mainGroup = mainGroupRef.current
+    if (!map || !mainGroup) return
 
-    // Cleanup and re-init feature groups for any dynamic types
-    Object.values(layerGroupsRef.current).forEach(g => g.clearLayers())
-    dynamicProjectTypes.forEach(t => {
-      if (!layerGroupsRef.current[t]) {
-        layerGroupsRef.current[t] = L.featureGroup().addTo(map)
+    // 1. Clear existing category groups from mainGroup and the ref
+    Object.values(categoryGroupsRef.current).forEach(group => mainGroup.removeLayer(group))
+    categoryGroupsRef.current = {}
+
+    if (projects.length === 0) return;
+    categoryGroupsRef.current = {}
+
+    // 2. Create new groups for each project type
+    const sortedProjects = [...projects].sort((a, b) => {
+      const score = { 'Draft': 1, 'Correction': 2, 'Pending for Request': 3, 'Submitted': 4, 'Approved': 5 };
+      return (score[a.status] || 0) - (score[b.status] || 0);
+    });
+    sortedProjects.forEach(p => {
+      if (!categoryGroupsRef.current[p.type]) {
+        categoryGroupsRef.current[p.type] = L.featureGroup()
       }
-    })
 
-    projectsToDisplay.forEach(p => {
-      if (!p.coordinates?.length) return
-      
-      // Visibility check
-      if (layerVisibility[p.type] === false) return;
-
-      const idx = dynamicProjectTypes.indexOf(p.type)
-      const color = getLayerColor(p.type, idx)
-      const isLine = p.geom_type?.includes('LineString')
-      const isPoint = p.geom_type?.includes('Point') && !p.geom_type?.includes('Multi')
-
-      let layer;
-      if (isPoint) {
-         layer = L.circleMarker(p.coordinates, { radius: 6, color, fillColor: color, fillOpacity: 0.8, weight: 2 })
-      } else if (isLine) {
-         layer = L.polyline(p.coordinates, { color, weight: 6, opacity: 0.8 })
+      let color = p.color || '#1a73e8'
+      if (p.status === 'Pending for Request') {
+        color = '#f97316' // Vibrant Orange for pending features
       } else {
-         layer = L.polygon(p.coordinates, { color, fillOpacity: 0.3, weight: 2 })
+        // If it is a custom color (not one of the default blues), respect it 100%!
+        const isDefaultColor = !p.color || p.color.toLowerCase() === '#1a73e8' || p.color.toLowerCase() === '#2563eb' || p.color.toLowerCase() === '#2c3e50';
+        if (isDefaultColor) {
+          if (p.status === 'Submitted' || p.status === 'Approved') {
+            color = '#10b981' // Premium Emerald Green for approved features
+          }
+        }
       }
-      
-      layer.bindTooltip(`<b>${p.name}</b><br/>${p.type}<br/>Status: ${p.status}`, { sticky: true })
-      layer.on('click', (e) => {
-        L.DomEvent.stopPropagation(e)
-        setSelectedProject(p)
-        setSelectedLayerStats(null) 
+      let layer;
+      if (!p.coordinates || p.coordinates.length === 0) return;
+      try {
+        const isClosedLoop = () => {
+          let coords = p.coordinates;
+          if (!Array.isArray(coords) || coords.length === 0) return false;
+
+          // If it is a double-nested coordinate array (e.g. GeoJSON polygon ring), extract the outer ring
+          if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
+            coords = coords[0];
+          }
+
+          if (coords.length >= 4) {
+            const first = coords[0];
+            const last = coords[coords.length - 1];
+            if (first && last && typeof first[0] === 'number' && typeof last[0] === 'number') {
+              return Math.abs(first[0] - last[0]) < 0.005 && Math.abs(first[1] - last[1]) < 0.005;
+            }
+          }
+          return false;
+        };
+
+        if (p.geom_type?.toLowerCase().includes('point')) {
+          const pt = typeof p.coordinates[0] === 'number' ? p.coordinates : p.coordinates[0];
+          layer = L.circleMarker(pt, { radius: 6, color: '#fff', fillColor: color, fillOpacity: 0.9, weight: 2 })
+        } else if ((p.geom_type?.toLowerCase().includes('line') || p.geom_type?.toLowerCase().includes('string')) && !isClosedLoop()) {
+          layer = L.polyline(p.coordinates, { color, weight: 5, opacity: 0.8 })
+        } else {
+          layer = L.polygon(p.coordinates, { color, fillColor: color, fillOpacity: 0.85, weight: 3 })
+        }
+
+        layer.projectId = p.id
+        layer.bindTooltip(p.name, { sticky: true }).on('click', (e) => {
+          L.DomEvent.stopPropagation(e)
+          setSelectedProject(p)
+        })
+
+        categoryGroupsRef.current[p.type].addLayer(layer)
+      } catch (e) { console.error("Layer error:", e) }
+    })
+
+    // 3. Add groups to the map based on initial visibility
+    Object.keys(categoryGroupsRef.current).forEach(type => {
+      if (isLayerVisible(type)) {
+        mainGroup.addLayer(categoryGroupsRef.current[type])
+      }
+    })
+  }, [projects]) // Only rebuild when data actually changes
+
+  // REFACTORED: Instant toggle without rebuilding the world
+  useEffect(() => {
+    const mainGroup = mainGroupRef.current
+    if (!mainGroup) return
+
+    Object.keys(categoryGroupsRef.current).forEach(type => {
+      const group = categoryGroupsRef.current[type]
+      const shouldBeVisible = isLayerVisible(type)
+
+      if (group) {
+        if (shouldBeVisible && !mainGroup.hasLayer(group)) {
+          mainGroup.addLayer(group)
+        } else if (!shouldBeVisible && mainGroup.hasLayer(group)) {
+          mainGroup.removeLayer(group)
+        }
+      }
+    })
+  }, [layerVisibility])
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    const formData = new FormData(e.target)
+    const data = Object.fromEntries(formData.entries())
+
+    // Explicitly check for color
+    const finalColor = selectedColor || '#1a73e8'
+
+    try {
+      await createProject({
+        ...data,
+        ward: data.ward || "N/A",
+        coordinates: drawnCoordinates || [],
+        type: data.project_type,
+        color: data.color || selectedColor,
+        geom_type: drawnGeomType
       })
-      
-      const group = layerGroupsRef.current[p.type]
-      if (group) group.addLayer(layer)
-    })
-  }, [projectsToDisplay, layerVisibility])
-
-  const handleLayerClick = (layerName) => {
-    const layerProjects = projects.filter(p => p.type === layerName)
-    if (layerProjects.length === 0) return
-
-    const stats = {
-      name: layerName,
-      count: layerProjects.length,
-      statusBreakdown: {},
-      totalBudget: 0
+      alert("Successfully saved! Color: " + finalColor)
+      setShowForm(false); setDrawnCoordinates(null); setDrawnGeomType('Polygon');
+      drawnLayersRef.current.clearLayers()
+      loadProjects()
+    } catch (err) {
+      alert("Save failed: " + err.message)
     }
+  }
 
-    layerProjects.forEach(p => {
-      stats.statusBreakdown[p.status] = (stats.statusBreakdown[p.status] || 0) + 1
-      const num = parseFloat(String(p.budget).replace(/[^0-9.]/g, '')) || 0
-      stats.totalBudget += num
-    })
-
-    setSelectedLayerStats(stats)
-    setSelectedProject(null) // Ensure we show Layer Stats, not a specific Feature
-    const group = layerGroupsRef.current[layerName]
-    if (group && mapInstanceRef.current) {
-      const bounds = group.getBounds()
+  const handleFitAll = () => {
+    if (mainGroupRef.current && mapInstanceRef.current) {
+      const bounds = mainGroupRef.current.getBounds()
       if (bounds.isValid()) mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50] })
     }
   }
 
-  const handleSave = async () => {
-    if (!form.name || !pendingGeometry) return
-    setSaving(true)
-    try {
-      await createProject({ ...form, coordinates: pendingGeometry })
-      loadProjects()
-      setShowForm(false)
-      setPendingGeometry(null)
-      drawnLayersRef.current?.clearLayers()
-    } catch (e) {
-      alert('Save failed: ' + e.message)
-    } finally { setSaving(false) }
-  }
-
-  const handleDeleteProject = async (id) => {
-    if (!confirm(`Are you sure you want to delete "${selectedProject.name}"?`)) return
-    try {
-      await deleteProject(id)
-      loadProjects()
-      setSelectedProject(null)
-    } catch (e) {
-      alert('Delete failed: ' + e.message)
-    }
-  }
-
-  const handleUpdateStatus = async (id, status) => {
-    try {
-      await updateStatus(id, status)
-      loadProjects()
-      setSelectedProject(prev => prev ? { ...prev, status } : null)
-    } catch (e) {
-      alert('Update failed: ' + e.message)
-    }
-  }
-
-  const handleStartEditingShape = () => {
-    if (!selectedProject || !mapInstanceRef.current) return
-    setIsEditingShape(true)
-    
-    // Clear current drawing group
-    drawnLayersRef.current?.clearLayers()
-    
-    // 1. Create editable layer and add to DRAW group
-    const isLine = selectedProject.geom_type?.includes('LineString')
-    const layer = isLine 
-      ? L.polyline(selectedProject.coordinates, { color: '#1a73e8', weight: 6, opacity: 0.6 })
-      : L.polygon(selectedProject.coordinates, { color: '#1a73e8', fillOpacity: 0.3, weight: 3 })
-    
-    drawnLayersRef.current?.addLayer(layer)
-    setPendingGeometry(selectedProject.coordinates)
-    
-    // 2. Enable Edit Mode automatically
-    if (layer.editing) layer.editing.enable()
-    
-    // 3. Zoom to it
-    mapInstanceRef.current.fitBounds(layer.getBounds(), { padding: [50, 50] })
-  }
-
-  const handleCancelEditing = () => {
-    setIsEditingShape(false)
-    setPendingGeometry(null)
-    drawnLayersRef.current?.clearLayers()
-  }
-
-  const handleSaveModifiedShape = async () => {
-    if (!selectedProject || !drawnLayersRef.current) return
-    
-    // Extract current coordinates from the map layer
-    const layer = drawnLayersRef.current.getLayers()[0]
-    if (!layer) return
-
-    const currentCoords = extractCoords(layer)
-    setSaving(true)
-    try {
-      await updateGeometry(selectedProject.id, currentCoords)
-      loadProjects()
-      setIsEditingShape(false)
-      drawnLayersRef.current?.clearLayers()
-    } catch (e) {
-      alert('Update failed: ' + e.message)
-    } finally { setSaving(false) }
-  }
-
-  const handleManualUpload = async (file) => {
+  const handleUpload = async (e) => {
+    const file = e.target.files[0]
     if (!file) return
-    const formData = new FormData()
-    formData.append('file', file)
-    setSaving(true)
+    setUploading(true)
+    setUploadProgress(10) // Start at 10% exactly like user screenshot!
+
+    // Simulate smooth progress
+    let progress = 10;
+    const interval = setInterval(() => {
+      if (progress < 90) {
+        progress += Math.floor(Math.random() * 8) + 2;
+        if (progress > 90) progress = 90;
+        setUploadProgress(progress);
+      } else if (progress < 98) {
+        progress += 1;
+        setUploadProgress(progress);
+      }
+    }, 250);
+
     try {
-      const response = await fetch('/api/method/qgis.api.gis_project.upload_manual_data', {
-        method: 'POST',
-        headers: { 'X-Frappe-CSRF-Token': 'fetch' },
-        credentials: 'include',
-        body: formData,
-      })
-      const data = await response.json()
-      if (data.message?.success) {
-        alert('File processed successfully')
+      const res = await manualUpload(file)
+      clearInterval(interval);
+      setUploadProgress(100);
+      setTimeout(() => {
+        alert(res.message || "Upload successful")
         loadProjects()
-      } else {
-        alert('Upload failed: ' + (data.message?.error || 'Unknown error'))
-      }
-    } catch (e) { alert('Error: ' + e.message) }
-    finally { setSaving(false) }
-  }
-
-  const handleDelete = async (id) => {
-    try {
-      await deleteProject(id)
-      setSelectedProject(null)
-      loadProjects()
-    } catch (e) { alert(e.message) }
-  }
-
-  const handleStatusUpdate = async (newStatus) => {
-    if (!selectedProject) return
-    try {
-      await updateStatus(selectedProject.id, newStatus)
-      loadProjects()
-      const updated = { ...selectedProject, status: newStatus }
-      setSelectedProject(updated)
-    } catch (e) { alert(e.message) }
-  }
-
-  const handleSearchNearby = async () => {
-    if (!selectedProject || !selectedProject.coordinates?.length) return
-    
-    // Helper to flatten nested coordinates
-    const flatten = (coords) => {
-       if (typeof coords[0] === 'number') return [coords]
-       return coords.reduce((acc, val) => acc.concat(Array.isArray(val[0]) ? flatten(val) : [val]), [])
-    }
-    
-    let center;
-    const flatCoords = flatten(selectedProject.coordinates)
-    if (flatCoords.length > 0) {
-       const lats = flatCoords.map(c => c[0])
-       const lngs = flatCoords.map(c => c[1])
-       center = [
-         (Math.min(...lats) + Math.max(...lats)) / 2,
-         (Math.min(...lngs) + Math.max(...lngs)) / 2
-       ]
-    } else {
-       center = [0, 0]
-    }
-
-    if (isNaN(center[0]) || isNaN(center[1])) {
-       alert('Invalid coordinates for search.')
-       return
-    }
-
-    setIsSearchingNearby(true)
-    nearbyLayersRef.current?.clearLayers()
-    
-    try {
-      const data = await fetchNearbyPlaces(center[0], center[1], nearbyRadius, nearbyType)
-      if (data.success) {
-        setNearbyPOIs(data.results)
-        
-        data.results.forEach(poi => {
-           const icon = L.divIcon({
-              html: `<div style="background:white; border:2px solid #2563eb; border-radius:50%; width:30px; height:30px; display:flex; alignItems:center; justifyContent:center; font-size:16px; box-shadow:0 2px 4px rgba(0,0,0,0.2)">${
-                 poi.type === 'hospital' ? '🏥' : 
-                 poi.type === 'school' ? '🎓' : 
-                 poi.type === 'place_of_worship' ? '🛕' : 
-                 poi.type === 'police' ? '👮' : 
-                 poi.type === 'bank' ? '💰' : '📍'
-              }</div>`,
-              className: '',
-              iconSize: [30, 30],
-              iconAnchor: [15, 15]
-           })
-
-           const marker = L.marker([poi.lat, poi.lng], { icon })
-              .bindPopup(`
-                 <div style="font-family:sans-serif; min-width:150px">
-                    <div style="font-weight:800; color:#1e2d45; border-bottom:1px solid #eee; padding-bottom:4px; margin-bottom:4px">${poi.name}</div>
-                    <div style="font-size:11px; color:#64748b; margin-bottom:4px">Type: <b>${poi.type}</b></div>
-                    <div style="font-size:11px; color:#475569; line-height:1.4">${poi.address}</div>
-                 </div>
-              `)
-              .addTo(nearbyLayersRef.current)
-        })
-
-        if (data.results.length > 0) {
-           const bounds = nearbyLayersRef.current.getBounds()
-           mapInstanceRef.current?.fitBounds(bounds, { padding: [40, 40] })
-        } else {
-           alert('No results found for this area and type.')
-        }
-      } else {
-        alert('Search failed: ' + data.error)
-      }
-    } catch (e) {
-      alert('Error searching nearby: ' + e.message)
+        setUploadProgress(null);
+      }, 500);
+    } catch (err) {
+      clearInterval(interval);
+      setUploadProgress(null);
+      alert(err.message)
     } finally {
-      setIsSearchingNearby(false)
-    }
-  }
-  // External Search Debounce
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (searchTerm.length >= 3) {
-        const results = await searchExternalLocations(searchTerm)
-        setExternalResults(results)
-      } else {
-        setExternalResults([])
-      }
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [searchTerm])
-
-  const handleSearch = (term) => {
-    const val = term || searchTerm
-    if (!val) return
-    
-    setIsSearchFocused(false)
-    
-    // 1. Search internally first
-    const matched = projects.filter(p => 
-      p.name.toLowerCase().includes(val.toLowerCase()) || 
-      p.road_name?.toLowerCase().includes(val.toLowerCase()) ||
-      p.ward?.toString().includes(val)
-    )
-    
-    // In G-Maps, hitting Enter opens the best result in detail view
-    if (matched.length > 0) {
-       const bestMatch = matched[0]
-       setSelectedProject(bestMatch)
-       setSelectedLocation(null)
-       setShowSideResults(false)
-       setSearchTerm(bestMatch.name)
-       mapInstanceRef.current?.setView(bestMatch.coordinates[0] || bestMatch.coordinates, 17)
-    } else if (externalResults.length > 0) {
-       // 2. Fallback to external geocoding best match
-       const loc = externalResults[0]
-       setSelectedLocation(loc)
-       setSelectedProject(null)
-       setShowSideResults(false)
-       setSearchTerm(loc.display_name.split(',')[0])
-       mapInstanceRef.current?.setView([loc.lat, loc.lon], 13)
+      setUploading(false);
+      e.target.value = ''
     }
   }
 
-  const handleSelectExternal = (loc) => {
-    setSelectedLocation(loc)
-    setSelectedProject(null)
-    setShowSideResults(false)
-    setSearchTerm(loc.display_name.split(',')[0])
-    mapInstanceRef.current?.setView([loc.lat, loc.lon], 15)
+  const handleDrawPolygon = () => {
+    if (mapInstanceRef.current && drawControlRef.current) {
+      drawnLayersRef.current.clearLayers();
+      setDrawnCoordinates(null);
+
+      const polygonDrawer = new L.Draw.Polygon(
+        mapInstanceRef.current,
+        drawControlRef.current.options.draw.polygon
+      );
+      polygonDrawer.enable();
+    }
   }
 
-  const inp = { width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', marginBottom: '10px' }
-  const lbl = { fontSize: '12px', fontWeight: 600, display: 'block', marginBottom: '4px' }
-
-  const tableHeaderStyle = { padding: '10px', background: '#f1f5f9', borderBottom: '1px solid #e2e8f0', fontSize: '11px', fontWeight: 700, color: '#475569', textAlign: 'left', position: 'sticky', top: 0, zIndex: 10 }
-  const tableCellStyle = { padding: '10px', borderBottom: '1px solid #f1f5f9', fontSize: '12px', color: '#1e293b' }
 
   return (
-    <div style={{ height: '100%', width: '100%', display: 'flex', background: '#e5e7eb', overflow: 'hidden', position: 'relative' }}>
-      
-      {/* 1. EXTREME LEFT MINI-SIDEBAR (GOOGLE STYLE) */}
-      <div style={{ width: '72px', background: 'white', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '15px 0', gap: '15px', zIndex: 1100 }}>
-         <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '1px solid #e2e8f0' }}>☰</div>
-         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', alignItems: 'center', flex: 1 }}>
-            {[
-               { i: '📍', l: 'Explore' },
-               { i: '🔖', l: 'Saved' },
-               { i: '🕒', l: 'Recents' }
-            ].map(item => (
-               <div key={item.l} onClick={() => { setActiveTab(item.l); setShowSideResults(true); setSelectedProject(null); setSelectedLocation(null); }} style={{ textAlign: 'center', cursor: 'pointer', opacity: activeTab === item.l ? 1 : 0.6 }}>
-                  <div style={{ fontSize: '20px', color: activeTab === item.l ? '#1a73e8' : '#64748b' }}>{item.i}</div>
-                  <div style={{ fontSize: '10px', fontWeight: 600, color: activeTab === item.l ? '#1a73e8' : '#64748b', marginTop: '4px' }}>{item.l}</div>
-               </div>
-            ))}
-         </div>
+    <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden', background: '#f0f2f5' }}>
+      <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".zip,.geojson,.kml,.gpkg" onChange={handleUpload} />
 
-            {[
-               { id: 'standard', l: 'Default', img: 'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?auto=format&fit=crop&w=80' },
-               { id: 'satellite', l: 'Satellite', img: 'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=80' },
-               { id: 'terrain', l: 'Terrain', img: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=80' }
-            ].map(type => (
-               <div key={type.id} onClick={() => setMapMode(type.id)} style={{ cursor: 'pointer', textAlign: 'center', marginBottom: '15px' }}>
-                  <div style={{ width: '46px', height: '46px', borderRadius: '10px', overflow: 'hidden', border: mapMode === type.id ? '2px solid #1a73e8' : '1px solid #eee', margin: '0 auto', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                     <img src={type.img} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                  <div style={{ fontSize: '9px', marginTop: '4px', fontWeight: mapMode === type.id ? 700 : 500, color: mapMode === type.id ? '#1a73e8' : '#64748b' }}>{type.l}</div>
-               </div>
-            ))}
-
-            <div onClick={() => setShowLayers(!showLayers)} style={{ textAlign: 'center', cursor: 'pointer', marginBottom: '10px' }}>
-               <div style={{ fontSize: '20px', color: showLayers ? '#1a73e8' : '#64748b' }}>⚙️</div>
-               <div style={{ fontSize: '9px', fontWeight: 600, color: showLayers ? '#1a73e8' : '#64748b' }}>Layers</div>
-            </div>
-
-            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#2563eb', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '12px' }}>S</div>
-         </div>
-
-      {/* 2. SIDEBAR SYSTEM (RESULTS OR DETAILS) */}
-      <div style={{ width: (showSideResults || selectedProject || selectedLocation) ? '408px' : '0', background: 'white', borderRight: (showSideResults || selectedProject || selectedLocation) ? '1px solid #e2e8f0' : 'none', display: 'flex', flexDirection: 'column', zIndex: 1001, boxShadow: '2px 0 10px rgba(0,0,0,0.05)', position: 'relative', transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)', overflow: 'hidden' }}>
-         <div style={{ width: '408px', height: '100%', display: 'flex', flexDirection: 'column' }}>
-            
-            {/* A. DYNAMIC LIST VIEW (Explore / Saved / Recents) */}
-            {(showSideResults && !selectedProject && !selectedLocation) && (
-               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                  <div style={{ padding: '24px 20px', borderBottom: '1px solid #f1f3f4' }}>
-                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ fontSize: '18px', fontWeight: 600 }}>
-                           {activeTab === 'Explore' ? (searchTerm ? 'Search Results' : 'Explore Projects') : `${activeTab} Projects`}
-                        </div>
-                        <button onClick={() => setShowSideResults(false)} style={{ border: 'none', background: '#f8f9fa', borderRadius: '50%', width: '32px', height: '32px', cursor: 'pointer' }}>✕</button>
-                     </div>
-                  </div>
-                  <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0' }}>
-                     {projectsToDisplay.length === 0 ? (
-                        <div style={{ padding: '40px 20px', textAlign: 'center', color: '#70757a' }}>
-                           <div style={{ fontSize: '40px', marginBottom: '10px' }}>📁</div>
-                           <div style={{ fontSize: '14px' }}>No records found in {activeTab}.</div>
-                        </div>
-                     ) : (
-                        projectsToDisplay.map(p => (
-                           <div key={'list-'+p.id} onClick={() => { setSelectedProject(p); setShowSideResults(false); mapInstanceRef.current?.setView(p.coordinates[0] || p.coordinates, 17); }} style={{ padding: '12px 20px', cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#f8f9fa'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                              <div style={{ display: 'flex', gap: '15px' }}>
-                                 <div style={{ fontSize: '20px' }}>📍</div>
-                                 <div style={{ flex: 1 }}>
-                                    <div style={{ fontWeight: 500, fontSize: '14px', color: '#202124' }}>{p.name}</div>
-                                    <div style={{ fontSize: '13px', color: '#70757a' }}>{p.type} • Ward {p.ward}</div>
-                                    <div style={{ marginTop: '4px', fontSize: '10px', display: 'inline-block', padding: '2px 6px', borderRadius: '4px', background: STATUS_COLORS[p.status]?.bg, color: STATUS_COLORS[p.status]?.color, fontWeight: 700 }}>{p.status.toUpperCase()}</div>
-                                 </div>
-                              </div>
-                           </div>
-                        ))
-                     )}
-                     
-                     {activeTab === 'Explore' && externalResults.map((loc, idx) => (
-                        <div key={'ext-list-'+idx} onClick={() => handleSelectExternal(loc)} style={{ padding: '12px 20px', cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#f8f9fa'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                           <div style={{ display: 'flex', gap: '15px' }}>
-                              <div style={{ fontSize: '20px' }}>🌏</div>
-                              <div>
-                                 <div style={{ fontWeight: 500, fontSize: '14px' }}>{loc.display_name.split(',')[0]}</div>
-                                 <div style={{ fontSize: '12px', color: '#70757a' }}>{loc.display_name}</div>
-                              </div>
-                           </div>
-                        </div>
-                     ))}
-                  </div>
-               </div>
-            )}
-
-            {/* B. DETAIL VIEW SIDEBAR (THE GOOGLE MAPS LOOK) */}
-            {(selectedProject || selectedLocation) && (
-               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                  {/* Hero Image */}
-                  <div style={{ position: 'relative', width: '100%', height: '240px', background: '#e8eaed', overflow: 'hidden' }}>
-                     <img 
-                        src={selectedProject ? "https://images.unsplash.com/photo-1548013146-72479768bada?auto=format&fit=crop&w=400&h=240" : "https://images.unsplash.com/photo-1595841696677-5264379a0937?auto=format&fit=crop&w=400&h=240"} 
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                        alt="Location"
-                     />
-                     <button onClick={() => { setSelectedProject(null); setSelectedLocation(null); }} style={{ position: 'absolute', top: '16px', right: '16px', borderRadius: '50%', width: '36px', height: '36px', background: 'rgba(255,255,255,0.9)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)' }}>✕</button>
-                  </div>
-
-                  <div style={{ padding: '24px 20px', flex: 1, overflowY: 'auto' }}>
-                     {/* Title Section */}
-                     <div style={{ marginBottom: '16px' }}>
-                        <h1 style={{ fontSize: '24px', fontWeight: 500, color: '#202124', marginBottom: '4px' }}>
-                           {selectedProject ? selectedProject.name : selectedLocation?.display_name.split(',')[0]}
-                        </h1>
-                        <div style={{ fontSize: '14px', color: '#70757a' }}>
-                           {selectedProject ? `${selectedProject.type} • Ward ${selectedProject.ward}` : selectedLocation?.display_name}
-                        </div>
-                     </div>
-
-                     {/* Action Buttons (The Circular Blue ones) */}
-                     <div style={{ display: 'flex', gap: '24px', paddingBottom: '24px', borderBottom: '1px solid #f1f3f4', marginBottom: '24px' }}>
-                        {[
-                           { l: 'Directions', i: '↪️' },
-                           { l: 'Save', i: '🔖' },
-                           { l: 'Nearby', i: '🧭' },
-                           { l: 'Send to phone', i: '📱' },
-                           { l: 'Share', i: '🔗' }
-                        ].map(act => (
-                           <div key={act.l} style={{ textAlign: 'center', cursor: 'pointer', flex: 1 }}>
-                              <div style={{ width: '36px', height: '36px', borderRadius: '50%', border: '1px solid #dadce0', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 8px', color: '#1a73e8', fontSize: '18px' }}>
-                                 {act.i}
-                              </div>
-                              <div style={{ fontSize: '11px', color: '#1a73e8', fontWeight: 500 }}>{act.l}</div>
-                           </div>
-                        ))}
-                     </div>
-
-                     {/* Info List */}
-                     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                           <span style={{ fontSize: '18px' }}>📍</span>
-                           <div style={{ fontSize: '14px', color: '#3c4043' }}>{selectedProject ? selectedProject.road_name : (selectedLocation?.display_name || 'Bhopal Central Area')}</div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                           <span style={{ fontSize: '18px' }}>🏢</span>
-                           <div style={{ fontSize: '14px', color: '#3c4043' }}>{selectedProject ? `Contractor: ${selectedProject.contractor_details || 'City Council'}` : 'Municipal Corporation of Bhopal'}</div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                           <span style={{ fontSize: '18px' }}>📊</span>
-                           <div style={{ fontSize: '14px', color: '#1a73e8', fontWeight: 600, cursor: 'pointer' }}>View GIS Attributes Table</div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                           <span style={{ fontSize: '18px' }}>📅</span>
-                           <div style={{ fontSize: '14px', color: '#3c4043' }}>Updated {selectedProject ? selectedProject.created_at.split(' ')[0] : 'Just now'}</div>
-                        </div>
-                     </div>
-
-                     {/* Description / Quick Facts */}
-                     <div style={{ marginTop: '30px', padding: '20px 0', borderTop: '8px solid #f1f3f4' }}>
-                        <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '12px' }}>Quick facts</h3>
-                        <p style={{ fontSize: '14px', color: '#3c4043', lineHeight: '1.6' }}>
-                           {selectedProject 
-                              ? `This project is part of the urban development initiative in ${selectedProject.ward}. It focuses on ${selectedProject.type.toLowerCase()} to improve resident accessibility and infrastructure quality.` 
-                              : "Bhopal is a city in the central Indian state of Madhya Pradesh. It's one of India's greenest cities. There are two main lakes, the Upper Lake and the Lower Lake. On the banks of the Upper Lake is Van Vihar National Park."
-                           }
-                        </p>
-                        <div style={{ color: '#1a73e8', fontSize: '13px', fontWeight: 600, marginTop: '8px', cursor: 'pointer' }}>View More ›</div>
-                     </div>
-                  </div>
-               </div>
-            )}
-         </div>
-      </div>
-
-      {/* 3. MAIN MAP AREA */}
-      <div style={{ flex: 1, position: 'relative' }}>
-         <div ref={mapRef} style={{ height: '100%', width: '100%' }} />
-
-         {/* 4. SEARCH BAR PANEL (MODERNIZED) */}
-         <div style={{ position: 'absolute', top: '12px', left: '12px', zIndex: 1000, width: '408px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ 
-               background: 'white', 
-               padding: '0 16px', 
-               borderRadius: isSearchFocused && (searchTerm || externalResults.length > 0) ? '8px 8px 0 0' : '8px', 
-               boxShadow: '0 2px 4px rgba(0,0,0,0.2), 0 -1px 0px rgba(0,0,0,0.02)', 
-               display: 'flex', 
-               alignItems: 'center', 
-               height: '48px',
-               transition: 'all 0.2s',
-               borderBottom: (isSearchFocused && (searchTerm || externalResults.length > 0)) ? '1px solid #f1f3f4' : 'none'
-            }}>
-               <button onClick={() => setShowSideResults(!showSideResults)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#5f6368', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '100%' }}>☰</button>
-               <input 
-                  type="text" 
-                  placeholder="Search Google Maps" 
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  onFocus={() => { setIsSearchFocused(true); setShowSideResults(false); }}
-                  onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
-                  onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                  style={{ border: 'none', outline: 'none', flex: 1, fontSize: '16px', color: '#202124', background: 'transparent', marginLeft: '4px' }} 
-               />
-               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', height: '100%' }}>
-                  {searchTerm && (
-                     <button onClick={() => setSearchTerm('')} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '18px', color: '#70757a', padding: '0 8px', height: '100%' }}>✕</button>
-                  )}
-                  <div style={{ width: '1px', height: '28px', background: '#e8eaed', margin: '0 8px' }} />
-                  <button onClick={() => handleSearch()} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#5f6368', padding: '0 8px', height: '100%' }}>🔍</button>
-                  <button onClick={() => setShowForm(true)} title="Add GIS Project" style={{ border: 'none', background: '#1a73e8', color: 'white', fontWeight: 600, fontSize: '12px', padding: '0 12px', borderRadius: '4px', height: '32px', cursor: 'pointer', marginLeft: '4px', boxShadow: '0 1px 2px rgba(0,0,0,0.1)' }}>
-                     + NEW
-                  </button>
-               </div>
-            </div>
-
-            {/* INSTANT DROPDOWN (GOOGLE STYLE) */}
-            {(isSearchFocused && (searchTerm || externalResults.length > 0)) && (
-               <div style={{ 
-                  background: 'white', 
-                  borderRadius: '0 0 8px 8px', 
-                  boxShadow: '0 8px 16px rgba(0,0,0,0.15)', 
-                  overflow: 'hidden', 
-                  maxHeight: 'calc(100vh - 80px)',
-                  marginTop: '0',
-                  animation: 'fadeIn 0.1s ease-out'
-               }}>
-                  <div style={{ padding: '8px 0', overflowY: 'auto', maxHeight: '400px' }}>
-                     {projects.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).slice(0, 3).map(p => (
-                        <div key={'inst-s-'+p.id} onClick={() => { setSelectedProject(p); setSearchTerm(p.name); setIsSearchFocused(false); mapInstanceRef.current?.setView(p.coordinates[0] || p.coordinates, 17); }} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 16px', cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#f1f3f4'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                           <div style={{ fontSize: '18px', color: '#1a73e8', width: '24px', textAlign: 'center' }}>📍</div>
-                           <div style={{ fontSize: '14px', color: '#202124', fontWeight: 500 }}>{p.name}</div>
-                        </div>
-                     ))}
-                     {externalResults.map((loc, idx) => (
-                        <div key={'inst-ext-'+idx} onClick={() => handleSelectExternal(loc)} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 16px', cursor: 'pointer' }} onMouseEnter={e => e.currentTarget.style.background = '#f1f3f4'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                           <div style={{ fontSize: '18px', color: '#9aa0a6', width: '24px', textAlign: 'center' }}>🌏</div>
-                           <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: '14px', color: '#202124', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loc.display_name.split(',')[0]}</div>
-                              <div style={{ fontSize: '12px', color: '#70757a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loc.display_name}</div>
-                           </div>
-                        </div>
-                     ))}
-                  </div>
-               </div>
-            )}
-         </div>
-
-         {/* 5. TOP CATEGORY CHIPS */}
-         <div style={{ position: 'absolute', top: '16px', left: '420px', zIndex: 1000, display: 'flex', gap: '8px', alignItems: 'center', overflowX: 'auto', maxWidth: 'calc(100% - 100px)', paddingRight: '20px' }}>
-             {[
-                { l: 'State', v: 'state', i: '🇮🇳' },
-                { l: 'District', v: 'district', i: '🏙️' },
-                { l: 'City', v: 'city', i: '🏛️' },
-                { l: 'Area', v: 'area', i: '🏘️' },
-                { l: 'Roads', v: 'roads', i: '🛣️' },
-             ].map(chip => (
-                <button 
-                   key={chip.v} 
-                   onClick={() => { setSearchTerm(chip.l + ' '); setIsSearchFocused(true); }} 
-                   style={{ whiteSpace: 'nowrap', padding: '0 14px', background: 'white', border: '1px solid #dadce0', borderRadius: '20px', fontSize: '13px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '6px', height: '32px', cursor: 'pointer', color: '#3c4043', boxShadow: '0 1px 2px rgba(0,0,0,0.1)' }}>
-                   <span style={{ fontSize: '16px' }}>{chip.i}</span> {chip.l}
-                </button>
-             ))}
-         </div>
-
-         {/* 5. PLACE CARD (DETAILS PANEL) */}
-         {selectedProject && (
-            <div className="animate-slide" style={{ position: 'absolute', left: '12px', top: '70px', bottom: '12px', zIndex: 1001, width: '392px', background: 'white', borderTopLeftRadius: '0', borderBottomLeftRadius: '8px', borderTopRightRadius: '8px', borderBottomRightRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-               <div style={{ height: '220px', position: 'relative', background: getLayerColor(selectedProject.type, dynamicProjectTypes.indexOf(selectedProject.type)) }}>
-                  <button onClick={() => setSelectedProject(null)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'rgba(255,255,255,0.9)', border: 'none', width: '28px', height: '28px', borderRadius: '50%', color: '#5f6368', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>✕</button>
-                  <div style={{ position: 'absolute', bottom: '0', left: '0', right: '0', padding: '20px', background: 'linear-gradient(to top, rgba(0,0,0,0.7), transparent)' }}>
-                     <h2 style={{ color: 'white', margin: 0, fontSize: '24px', fontWeight: 400 }}>{selectedProject.name}</h2>
-                     <div style={{ color: 'white', fontSize: '14px', opacity: 0.9 }}>{selectedProject.type}</div>
-                  </div>
-               </div>
-
-               <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-                  <div style={{ display: 'flex', gap: '15px', marginBottom: '25px', borderBottom: '1px solid #e8eaed', paddingBottom: '20px' }}>
-                     <div style={{ textAlign: 'center', flex: 1, cursor: 'pointer' }} onClick={() => mapInstanceRef.current?.setView(selectedProject.coordinates[0] || selectedProject.coordinates, 17)}>
-                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', border: '1px solid #dadce0', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px', color: '#1a73e8' }}>📍</div>
-                        <div style={{ fontSize: '11px', color: '#1a73e8', fontWeight: 500 }}>Directions</div>
-                     </div>
-                     <div style={{ textAlign: 'center', flex: 1, cursor: 'pointer' }}>
-                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', border: '1px solid #dadce0', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px', color: '#1a73e8' }}>🔖</div>
-                        <div style={{ fontSize: '11px', color: '#1a73e8', fontWeight: 500 }}>Save</div>
-                     </div>
-                     <div style={{ textAlign: 'center', flex: 1, cursor: 'pointer' }}>
-                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', border: '1px solid #dadce0', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px', color: '#1a73e8' }}>📱</div>
-                        <div style={{ fontSize: '11px', color: '#1a73e8', fontWeight: 500 }}>Send to phone</div>
-                     </div>
-                     <div style={{ textAlign: 'center', flex: 1, cursor: 'pointer' }}>
-                        <div style={{ width: '36px', height: '36px', borderRadius: '50%', border: '1px solid #dadce0', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px', color: '#1a73e8' }}>↗️</div>
-                        <div style={{ fontSize: '11px', color: '#1a73e8', fontWeight: 500 }}>Share</div>
-                     </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                     <div style={{ display: 'flex', gap: '15px' }}>
-                        <div style={{ color: '#70757a', fontSize: '20px' }}>🏛️</div>
-                        <div style={{ fontSize: '14px', color: '#202124' }}>Ward {selectedProject.ward}, {selectedProject.road_name || 'Bhopal'}</div>
-                     </div>
-                     <div style={{ display: 'flex', gap: '15px' }}>
-                        <div style={{ color: '#70757a', fontSize: '20px' }}>💰</div>
-                        <div style={{ fontSize: '14px', color: '#202124', fontWeight: 500 }}>Budget: ₹ {selectedProject.budget}</div>
-                     </div>
-                     <div style={{ display: 'flex', gap: '15px' }}>
-                        <div style={{ color: '#70757a', fontSize: '20px' }}>🕒</div>
-                        <div style={{ fontSize: '14px', color: '#16a34a', fontWeight: 500 }}>Status: {selectedProject.status}</div>
-                     </div>
-                  </div>
-
-                  {/* Main Action Buttons */}
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '20px', marginBottom: '15px' }}>
-                     {!isEditingShape ? (
-                        <button onClick={handleStartEditingShape} style={{ flex: 1, padding: '12px', background: '#1a73e8', color: 'white', border: 'none', borderRadius: '24px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-                           ✏️ Edit Geometry
-                        </button>
-                     ) : (
-                        <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
-                           <button onClick={handleSaveModifiedShape} disabled={saving} style={{ flex: 2, padding: '12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: '24px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>
-                              {saving ? 'Saving...' : '✅ Save New Shape'}
-                           </button>
-                           <button onClick={handleCancelEditing} style={{ flex: 1, padding: '12px', background: '#fef2f2', color: '#dc2626', border: '1px solid #fee2e2', borderRadius: '24px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>
-                              ✕ Cancel
-                           </button>
-                        </div>
-                     )}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                     <button onClick={() => handleDeleteProject(selectedProject.id)} style={{ flex: 1, padding: '8px', background: '#fff', color: '#d93025', border: '1px solid #dadce0', borderRadius: '20px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>🗑️ Delete Project</button>
-                  </div>
-
-                  {/* Status Workflow Buttons */}
-                  {roleActions.nextStatus?.length > 0 && (
-                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px' }}>
-                        {roleActions.nextStatus.map(st => (
-                           <button key={st} onClick={() => handleStatusUpdate(st)} style={{ padding: '6px 12px', background: STATUS_COLORS[st]?.bg || '#f1f1f1', color: STATUS_COLORS[st]?.color || '#333', border: `1px solid ${STATUS_COLORS[st]?.border || '#ddd'}`, borderRadius: '4px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                              MARK AS {st.toUpperCase()}
-                           </button>
-                        ))}
-                     </div>
-                  )}
-
-                  <div style={{ marginTop: '30px' }}>
-                     <button onClick={handleSearchNearby} style={{ width: '100%', padding: '12px', background: '#1a73e8', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 500, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }}>
-                        See Nearby Schools & Hospitals
-                     </button>
-                  </div>
-               </div>
-            </div>
-         )}
-
-         {/* 6. FLOATING ACTION BUTTONS (BOTTOM RIGHT) */}
-         <div style={{ position: 'absolute', bottom: '30px', right: '12px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <button onClick={() => mapInstanceRef.current?.locate({setView: true, maxZoom: 16})} title="My Location" style={{ width: '40px', height: '40px', borderRadius: '4px', background: 'white', border: 'none', boxShadow: '0 1px 4px rgba(0,0,0,0.3)', cursor: 'pointer', fontSize: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎯</button>
-            <div style={{ display: 'flex', flexDirection: 'column', borderRadius: '4px', background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
-               <button onClick={() => mapInstanceRef.current?.zoomIn()} style={{ width: '40px', height: '40px', background: 'none', border: 'none', borderBottom: '1px solid #eee', cursor: 'pointer', fontSize: '20px', color: '#5f6368' }}>+</button>
-               <button onClick={() => mapInstanceRef.current?.zoomOut()} style={{ width: '40px', height: '40px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', color: '#5f6368' }}>-</button>
-            </div>
-         </div>
-
-         {/* 7. DATA TABLE (BOTTOM FULL WIDTH) */}
-         {showAttributeTable && (
-            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '350px', background: 'white', zIndex: 1100, boxShadow: '0 -4px 12px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column' }}>
-               <div style={{ padding: '12px 20px', borderBottom: '1px solid #f1f3f4', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, fontSize: '15px' }}>Infrastructure Attribute Data</span>
-                  <button onClick={() => setShowAttributeTable(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', color: '#5f6368' }}>✕</button>
-               </div>
-               <div style={{ flex: 1, overflow: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                     <thead>
-                        <tr>
-                            <th style={tableHeaderStyle}>ID</th>
-                            <th style={tableHeaderStyle}>ROAD NAME</th>
-                            <th style={tableHeaderStyle}>TYPE</th>
-                            <th style={tableHeaderStyle}>WARD</th>
-                            <th style={tableHeaderStyle}>ROAD NO</th>
-                            <th style={tableHeaderStyle}>LANDMARK</th>
-                            <th style={tableHeaderStyle}>DMA NO</th>
-                            <th style={tableHeaderStyle}>WARD NO</th>
-                            <th style={tableHeaderStyle}>WIDTH</th>
-                            <th style={tableHeaderStyle}>LENGTH</th>
-                            <th style={tableHeaderStyle}>AUTHOR</th>
-                            <th style={tableHeaderStyle}>ACTIONS</th>
-                        </tr>
-                     </thead>
-                     <tbody>
-                        {projects.map(p => (
-                           <tr key={p.id} style={{ borderBottom: '1px solid #f1f3f4' }}>
-                              <td style={tableCellStyle}>{p.id}</td>
-                              <td style={tableCellStyle}><b>{p.road_name || p.name}</b></td>
-                              <td style={tableCellStyle}>{p.type}</td>
-                              <td style={tableCellStyle}>{p.ward}</td>
-                              <td style={tableCellStyle}>{p.road_no || '-'}</td>
-                              <td style={tableCellStyle}>{p.landmark || '-'}</td>
-                              <td style={tableCellStyle}>{p.dma_no || '-'}</td>
-                              <td style={tableCellStyle}>{p.ward_no || '-'}</td>
-                              <td style={tableCellStyle}>{p.width || '-'}</td>
-                              <td style={tableCellStyle}>{p.road_length || '-'}</td>
-                              <td style={tableCellStyle}>{p.owner || 'System'}</td>
-                              <td style={tableCellStyle}>
-                                 <button onClick={() => { setSelectedProject(p); mapInstanceRef.current?.setView(p.coordinates[0] || p.coordinates, 16) }} style={{ padding: '4px 12px', background: '#1a73e8', color: 'white', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>View</button>
-                              </td>
-                           </tr>
-                        ))}
-                     </tbody>
-                  </table>
-               </div>
-            </div>
-         )}
-
-         {/* 6. GOOGLE STYLE LAYER SWITCHER (BOTTOM LEFT) */}
-         <div style={{ position: 'absolute', bottom: '24px', left: '24px', zIndex: 1000, display: 'flex', alignItems: 'flex-end', gap: '12px' }}>
-            <div 
-               style={{ 
-                  width: '64px', 
-                  height: '64px', 
-                  borderRadius: '12px', 
-                  border: '2px solid white', 
-                  boxShadow: '0 2px 6px rgba(0,0,0,0.3)', 
-                  cursor: 'pointer', 
-                  overflow: 'hidden', 
-                  position: 'relative',
-                  background: 'white',
-                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-               }}
-               onMouseEnter={e => {
-                  e.currentTarget.style.width = '240px'
-                  e.currentTarget.style.height = '80px'
-               }}
-               onMouseLeave={e => {
-                  e.currentTarget.style.width = '64px'
-                  e.currentTarget.style.height = '64px'
-               }}
-            >
-               <div style={{ display: 'flex', height: '100%', padding: '4px', gap: '8px' }}>
-                  {[
-                     { id: 'standard', l: 'Default', img: 'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?auto=format&fit=crop&w=72&h=72' },
-                     { id: 'satellite', l: 'Satellite', img: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=72&h=72' },
-                     { id: 'terrain', l: 'Terrain', img: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=72&h=72' }
-                  ].map(m => (
-                     <div 
-                        key={m.id} 
-                        onClick={(e) => {
-                           e.stopPropagation();
-                           setMapMode(m.id);
-                        }}
-                        style={{ 
-                           flexShrink: 0,
-                           width: '72px', 
-                           height: '100%', 
-                           borderRadius: '8px', 
-                           position: 'relative',
-                           overflow: 'hidden',
-                           border: mapMode === m.id ? '2px solid #1a73e8' : '1px solid #dadce0',
-                           cursor: 'pointer'
-                        }}
-                     >
-                        <img src={m.img} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={m.l} />
-                        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,0.5)', color: 'white', fontSize: '10px', textAlign: 'center', padding: '2px 0', fontWeight: 600 }}>
-                           {m.l}
-                        </div>
-                     </div>
-                  ))}
-               </div>
-            </div>
-         </div>
-      </div>
-
-      <input type="file" id="manual-upload" hidden onChange={(e) => handleManualUpload(e.target.files[0])} />
-
-      {/* 8. FORM OVERLAY (GOOGLE MATERIAL DESIGN) */}
+      {/* New Entry Modal */}
       {showForm && (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(32,33,36,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
-          <div style={{ width: '520px', background: 'white', borderRadius: '8px', boxShadow: '0 12px 15px rgba(0,0,0,0.24)', padding: '30px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '25px' }}>
-               <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 500 }}>Create New Infrastructure Record</h3>
-               <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', color: '#5f6368' }}>✕</button>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'white', width: '500px', borderRadius: '16px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
+            <div style={{ padding: '20px', background: '#1a73e8', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0 }}>New GIS Entry</h3>
+              <button onClick={() => { setShowForm(false); setDrawnCoordinates(null); drawnLayersRef.current.clearLayers(); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '20px', cursor: 'pointer' }}>✕</button>
             </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                  <input style={{...inp, height: '40px'}} value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="Feature ID..." />
-                  <input style={{...inp, height: '40px'}} value={form.road_name} onChange={e => setForm({...form, road_name: e.target.value})} placeholder="Street/Area Name..." />
-               </div>
-               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                  <input style={{...inp, height: '40px'}} value={form.ward} onChange={e => setForm({...form, ward: e.target.value})} placeholder="Ward Number..." />
-                  <select style={{...inp, height: '40px'}} value={form.type} onChange={e => setForm({...form, type: e.target.value})}>
-                    {['Road Construction', 'Drainage Work', 'Water Pipeline', 'Street Lights'].map(t => <option key={t}>{t}</option>)}
-                  </select>
-               </div>
-               <textarea style={{ ...inp, height: '80px', padding: '10px' }} value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Add remarks or description..." />
-            </div>
-            
-            <div style={{ marginTop: '30px', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-               <button onClick={() => setShowForm(false)} style={{ padding: '10px 20px', background: 'none', color: '#1a73e8', border: 'none', fontWeight: 500, cursor: 'pointer' }}>CANCEL</button>
-               <button onClick={handleSave} disabled={saving} style={{ padding: '10px 24px', background: '#1a73e8', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 500, cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }}>
-                 {saving ? 'SAVING...' : 'SAVE PROJECT'}
-               </button>
-            </div>
+            <form onSubmit={handleSave} style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <input type="hidden" name="color" value={selectedColor} />
+              <div><label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', marginBottom: '6px' }}>Project Name *</label><input name="name" required style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }} /></div>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', marginBottom: '6px' }}>Category *</label>
+                <select name="project_type" defaultValue="Road" required style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }}>
+                  {Object.keys(LAYER_META).map(k => <option key={k} value={k}>{k.replace(/_/g, ' ')}</option>)}
+                </select>
+              </div>
+              <div style={{ background: '#f8f9fa', padding: '12px', borderRadius: '8px', fontSize: '12px', color: '#666', border: '1px dashed #ccc', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>🎨 Selected Style:</span>
+                  <div style={{ width: '40px', height: '15px', background: selectedColor, borderRadius: '4px', border: '1px solid #ddd' }}></div>
+                  <span style={{ fontWeight: 'bold', color: '#333' }}>{selectedColor}</span>
+                </div>
+                <div>📍 {drawnCoordinates ? `${drawnCoordinates.length} points captured (${drawnGeomType})` : "Please draw on map first."}</div>
+              </div>
+              <div style={{ display: 'flex', gap: '12px', marginTop: '10px' }}>
+                <button type="button" onClick={() => { setShowForm(false); setDrawnCoordinates(null); drawnLayersRef.current.clearLayers(); }} style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #ddd', background: 'white' }}>Cancel</button>
+                <button type="submit" disabled={!drawnCoordinates} style={{ flex: 2, padding: '12px', borderRadius: '8px', border: 'none', background: drawnCoordinates ? '#1a73e8' : '#ccc', color: 'white', fontWeight: 'bold' }}>Save Feature</button>
+              </div>
+            </form>
           </div>
         </div>
       )}
+
+      {/* Sidebar - only visible in GIS Map mode, not in Live Project mode */}
+      {!liveFilterActive && <div style={{ width: showLayers ? '320px' : '0', height: '100%', background: 'white', borderRight: '1px solid #e0e0e0', transition: 'width 0.3s ease', display: 'flex', flexDirection: 'column', overflow: 'hidden', zIndex: 1001 }}>
+        <div style={{ padding: '20px', borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div><h3 style={{ margin: 0, fontSize: '18px' }}>Map Layers</h3></div>
+          <button onClick={handleFitAll} style={{ padding: '6px 12px', background: '#e8f0fe', border: 'none', borderRadius: '15px', color: '#1a73e8', fontSize: '12px', cursor: 'pointer' }}>🔍 Fit All</button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0' }}>
+          {dynamicProjectTypes.map(type => {
+            const count = projectCounts[type] || 0
+            const meta = LAYER_META[type] || { color: '#ccc' }
+            return (
+              <div key={type} style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '15px', borderBottom: '1px solid #f9f9f9' }}>
+                <input type="checkbox" checked={isLayerVisible(type)} onChange={e => setLayerVisibility({ ...layerVisibility, [type]: e.target.checked })} />
+                <div style={{ flex: 1 }}><div style={{ fontSize: '14px', fontWeight: '500' }}>{type}</div><div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}><div style={{ width: '20px', height: '3px', background: meta.color }} /><span style={{ fontSize: '11px', color: '#888' }}>{count} features</span></div></div>
+              </div>
+            )
+          })}
+        </div>
+      </div>}
+
+      {/* Map Content Area */}
+      <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+        <div style={{ position: 'absolute', top: '20px', left: '20px', right: '20px', zIndex: 1000, display: 'flex', gap: '15px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', background: 'white', borderRadius: '25px', padding: '5px 20px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)', flex: 1, maxWidth: '450px', alignItems: 'center' }}>
+            <button onClick={() => setShowLayers(!showLayers)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', marginRight: '10px' }}>☰</button>
+            <input placeholder="Search Maps" style={{ border: 'none', padding: '10px', flex: 1, outline: 'none' }} />
+          </div>
+          {!liveFilterActive && (uploadProgress === null ? (
+            <button onClick={() => fileInputRef.current.click()} disabled={uploading} style={{ background: '#34a853', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', opacity: uploading ? 0.7 : 1 }}>↑ UPLOAD</button>
+          ) : (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              background: '#04a777',
+              borderRadius: '30px',
+              height: '42px',
+              padding: '4px',
+              minWidth: '240px',
+              boxShadow: '0 4px 12px rgba(4, 167, 119, 0.25)',
+              animation: 'fadeIn 0.2s ease',
+              border: '1px solid rgba(255, 255, 255, 0.1)'
+            }}>
+              {/* Percentage label */}
+              <div style={{
+                color: 'white',
+                fontWeight: '800',
+                fontSize: '14px',
+                padding: '0 12px 0 16px',
+                fontFamily: "'Inter', sans-serif",
+                minWidth: '55px',
+                textAlign: 'center'
+              }}>
+                {uploadProgress}%
+              </div>
+
+              {/* Progress track */}
+              <div style={{
+                flex: 1,
+                height: '32px',
+                border: '3px solid white',
+                borderRadius: '20px',
+                overflow: 'hidden',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                marginRight: '4px'
+              }}>
+                {/* Progress fill */}
+                <div style={{
+                  width: `${uploadProgress}%`,
+                  height: '100%',
+                  background: 'white',
+                  borderRadius: '16px',
+                  transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}></div>
+              </div>
+            </div>
+          ))}
+          {!liveFilterActive && <button onClick={handleDrawPolygon} style={{ background: '#1a73e8', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>✏️ Draw Polygon</button>}
+        </div>
+
+        {/* Color Palette (Commented Out)
+        <div style={{ position: 'absolute', top: '20px', right: '110px', zIndex: 1000, background: 'white', padding: '12px', borderRadius: '16px', boxShadow: '0 8px 30px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center', border: '1px solid rgba(0,0,0,0.05)' }}>
+          <div style={{ fontSize: '10px', fontWeight: '800', color: '#999', letterSpacing: '0.5px' }}>THEME</div>
+          {['#1a73e8', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#34495e', '#000000'].map(c => (
+            <div key={c} 
+                 onClick={() => setSelectedColor(c)} 
+                 title={c}
+                 style={{ 
+                   width: '26px', 
+                   height: '26px', 
+                   background: c, 
+                   borderRadius: '50%', 
+                   cursor: 'pointer', 
+                   transition: 'all 0.2s ease',
+                   transform: selectedColor === c ? 'scale(1.15)' : 'scale(1)',
+                   border: selectedColor === c ? '3px solid #333' : '2px solid white', 
+                   boxShadow: selectedColor === c ? '0 4px 10px rgba(0,0,0,0.3)' : '0 2px 5px rgba(0,0,0,0.1)' 
+                 }} 
+            />
+          ))}
+        </div>
+        */}
+
+        {/* Map Switcher */}
+        <div style={{ position: 'absolute', bottom: '30px', left: '20px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {['standard', 'satellite', 'terrain'].map(id => (
+            (showLayers || mapMode === id) && (
+              <div key={id} onClick={() => setMapMode(id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
+                <div style={{ width: '56px', height: '56px', borderRadius: '12px', border: mapMode === id ? '3px solid #1a73e8' : '3px solid white', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', overflow: 'hidden' }}>
+                  <img src={id === 'standard' ? 'https://a.tile.openstreetmap.org/0/0/0.png' : `https://mt1.google.com/vt/lyrs=${id === 'satellite' ? 'y' : 'p'}&x=0&y=0&z=0`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+                {showLayers && <span style={{ fontSize: '11px', fontWeight: '700', color: mapMode === id ? '#1a73e8' : '#5f6368' }}>{id === 'standard' ? 'Default' : id === 'satellite' ? 'Satellite' : 'Terrain'}</span>}
+              </div>
+            )
+          ))}
+          <div onClick={() => setShowLayers(!showLayers)} style={{ width: '56px', height: '56px', background: 'white', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: '20px' }}>☰</span><span style={{ fontSize: '10px', fontWeight: 'bold' }}>Layers</span></div>
+        </div>
+
+        {/* Right Controls */}
+        <div style={{ position: 'absolute', right: '20px', bottom: '30px', zIndex: 1000, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.2)', border: '1px solid #e0e0e0', overflow: 'hidden' }}>
+            <button onClick={() => mapInstanceRef.current?.zoomIn()} style={{ width: '45px', height: '45px', border: 'none', borderBottom: '1px solid #eee', cursor: 'pointer', fontSize: '20px', background: 'white', fontWeight: 'bold' }}>+</button>
+            <button onClick={() => mapInstanceRef.current?.zoomOut()} style={{ width: '45px', height: '45px', border: 'none', cursor: 'pointer', fontSize: '20px', background: 'white', fontWeight: 'bold' }}>-</button>
+          </div>
+        </div>
+
+        {/* Attribute Sidebar */}
+        {selectedProject && (
+          <div style={{ position: 'absolute', top: '85px', right: showLayers ? '20px' : '80px', width: 'calc(100% - 40px)', maxWidth: '350px', background: 'white', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', border: '1px solid #f1f5f9', zIndex: 1002, display: 'flex', flexDirection: 'column', maxHeight: 'calc(100% - 110px)', overflow: 'hidden' }}>
+            <div style={{ padding: '20px', background: '#1a73e8', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h4 style={{ margin: 0 }}>Attributes</h4><button onClick={() => setSelectedProject(null)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}>✕</button></div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '15px', minHeight: 0 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <tbody>
+                  {[
+                    { l: 'Project ID', v: selectedProject.id, k: 'id' },
+                    { l: 'Name', v: selectedProject.name, k: 'name' },
+                    { l: 'Type', v: selectedProject.type, k: 'type' },
+                    { l: 'Ward', v: selectedProject.ward, k: 'ward' },
+                    { l: 'Status', v: selectedProject.status, k: 'status' },
+                    { l: 'Road Name', v: selectedProject.road_name, k: 'road_name' },
+                    { l: 'Road No', v: selectedProject.road_no, k: 'road_no' },
+                    { l: 'Road Type', v: selectedProject.road_type, k: 'road_type' },
+                    { l: 'Pave Type', v: selectedProject.pave_type, k: 'pave_type' },
+                    { l: 'Landmark', v: selectedProject.landmark, k: 'landmark' },
+                    { l: 'Authority', v: selectedProject.authority, k: 'authority' },
+                    { l: 'Traffic', v: selectedProject.traffic, k: 'traffic' },
+                    { l: 'Width', v: selectedProject.width, k: 'width' },
+                    { l: 'SHAPE Length', v: selectedProject.shape_length, k: 'shape_length' },
+                    { l: 'UNP Name', v: selectedProject.unp_name, k: 'unp_name' },
+                    { l: 'UNP Type', v: selectedProject.unp_type, k: 'unp_type' },
+                    { l: 'DMA No', v: selectedProject.dma_no, k: 'dma_no' },
+                    { l: 'Ward No', v: selectedProject.ward_no, k: 'ward_no' },
+                    { l: 'Junction Name', v: selectedProject.junc_name, k: 'junc_name' },
+                    { l: 'Facility', v: selectedProject.facility, k: 'facility' },
+                    { l: 'Rail Route', v: selectedProject.rail_route, k: 'rail_route' },
+                    { l: 'Bridge Name', v: selectedProject.bridg_name, k: 'bridg_name' },
+                    { l: 'Bridge Type', v: selectedProject.bridg_type, k: 'bridg_type' },
+                    { l: 'Flyover Name', v: selectedProject.fly_name, k: 'fly_name' },
+                    { l: 'Description', v: selectedProject.description, k: 'description' },
+                    { l: 'Remarks', v: selectedProject.remarks, k: 'remarks' },
+                    { l: 'Approver', v: selectedProject.approver, k: 'approver', ro: true },
+                    ...Object.keys(selectedProject).filter(k => !STANDARD_KEYS.includes(k)).map(k => ({ l: k, v: selectedProject[k], k: k }))
+                  ].filter(r => r.v || isEditing).map((r, i) => (
+                    <tr key={i}>
+                      <td style={{ padding: '8px', fontWeight: 'bold', color: '#666', width: '40%', maxWidth: '120px', wordBreak: 'break-word', verticalAlign: 'top' }}>{r.l}</td>
+                      <td style={{ padding: '8px', wordBreak: 'break-word' }}>
+                        {isEditing && r.k !== 'id' && !r.ro ? (
+                          <input
+                            value={r.v || ''}
+                            onChange={(e) => setSelectedProject({ ...selectedProject, [r.k]: e.target.value })}
+                            style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
+                          />
+                        ) : r.v}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Amazon-style Horizontal Progress Tracker */}
+              {(() => {
+                const backendStages = selectedProject.stages || [
+                  { status: 'Approved', label: 'Approved', icon: '📋', color: '#16a34a' },
+                  { status: 'Work Started', label: 'Work Started', icon: '🔨', color: '#2563eb' },
+                  { status: 'Ongoing', label: 'Ongoing', icon: '⚙️', color: '#7c3aed' },
+                  { status: 'Hold', label: 'On Hold', icon: '⏸', color: '#ef4444' },
+                  { status: 'Near Completion', label: 'Near Completion', icon: '🏁', color: '#0891b2' },
+                  { status: 'Completed', label: 'Completed', icon: '✅', color: '#16a34a' }
+                ];
+                const STEPS = backendStages.map(s => s.status);
+                const STEP_LABELS = {};
+                const STEP_ICONS = {};
+                const STEP_COLORS = {};
+                backendStages.forEach(s => {
+                  STEP_LABELS[s.status] = s.label;
+                  STEP_ICONS[s.status] = s.icon;
+                  STEP_COLORS[s.status] = s.color;
+                });
+
+                const timeline = selectedProject.timeline || [];
+                const currentStatus = selectedProject.status;
+                const isOnHold = currentStatus === 'Hold';
+
+                // Collect detailed logs per step from timeline
+                const logsByStep = {};
+                STEPS.forEach(s => { logsByStep[s] = []; });
+                timeline.forEach(t => { if (logsByStep[t.status]) logsByStep[t.status].push(t); });
+
+                const showTracker = STEPS.includes(currentStatus) || timeline.length > 0;
+                if (!showTracker) return null;
+
+                return (
+                  <div style={{ marginTop: '20px', borderTop: '2px solid #f1f5f9', paddingTop: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                      <h5 style={{ margin: 0, color: '#0f172a', fontSize: '13px', fontWeight: '800', letterSpacing: '0.3px' }}>📦 Project Journey</h5>
+                      {isOnHold && (
+                        <span style={{ background: '#fef2f2', color: '#dc2626', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '20px', border: '1px solid #fecaca' }}>⏸ On Hold</span>
+                      )}
+                    </div>
+
+                    {/* Horizontal step tracker */}
+                    <div style={{ position: 'relative', paddingBottom: '6px', overflowX: 'auto' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', minWidth: '320px', position: 'relative' }}>
+                        {STEPS.map((step, idx) => {
+                          const isDone = STEPS.indexOf(currentStatus) > idx || currentStatus === step && step === 'Completed';
+                          const isCurrent = currentStatus === step;
+                          const stepColor = isDone || isCurrent ? STEP_COLORS[step] : '#cbd5e1';
+
+                          return (
+                            <div key={step} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, position: 'relative', minWidth: '52px' }}>
+                              {/* Connector line before */}
+                              {idx > 0 && (
+                                <div style={{
+                                  position: 'absolute',
+                                  top: '14px',
+                                  right: '50%',
+                                  left: '-50%',
+                                  height: '3px',
+                                  background: isDone ? STEP_COLORS[step] : '#e2e8f0',
+                                  zIndex: 0,
+                                  transition: 'background 0.3s'
+                                }} />
+                              )}
+
+                              {/* Circle */}
+                              <div style={{
+                                width: '30px',
+                                height: '30px',
+                                borderRadius: '50%',
+                                background: isDone ? stepColor : isCurrent ? stepColor : '#f1f5f9',
+                                border: `3px solid ${stepColor}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: isDone ? '14px' : '12px',
+                                position: 'relative',
+                                zIndex: 1,
+                                boxShadow: isCurrent ? `0 0 0 4px ${stepColor}30` : 'none',
+                                transition: 'all 0.3s',
+                                flexShrink: 0
+                              }}>
+                                {isDone ? <span style={{ color: '#fff', fontSize: '13px' }}>✓</span>
+                                  : isCurrent ? <span style={{ fontSize: '12px' }}>{STEP_ICONS[step]}</span>
+                                  : <span style={{ color: '#94a3b8', fontSize: '10px', fontWeight: '700' }}>{idx + 1}</span>}
+                              </div>
+
+                              {/* Label */}
+                              <div style={{ marginTop: '6px', textAlign: 'center', maxWidth: '60px' }}>
+                                <span style={{
+                                  fontSize: '9px',
+                                  fontWeight: isCurrent ? '800' : isDone ? '600' : '500',
+                                  color: isCurrent ? stepColor : isDone ? '#334155' : '#94a3b8',
+                                  lineHeight: '1.2',
+                                  display: 'block'
+                                }}>{STEP_LABELS[step] || step}</span>
+                                {/* Date from latest log for this step */}
+                                {logsByStep[step].length > 0 && (
+                                  <span style={{ fontSize: '8px', color: '#94a3b8', display: 'block', marginTop: '2px' }}>
+                                    {logsByStep[step][logsByStep[step].length - 1].date}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Detailed log cards below tracker */}
+                    {timeline.length > 0 && (
+                      <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <h6 style={{ margin: '0 0 6px 0', fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Activity Log</h6>
+                        {[...timeline].reverse().map((t, idx) => {
+                          const sc = STATUS_COLORS[t.status] || STATUS_COLORS.Draft;
+                          return (
+                            <div key={idx} style={{
+                              background: sc.bg,
+                              border: `1px solid ${sc.border}`,
+                              borderRadius: '10px',
+                              padding: '10px 12px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '6px'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <span style={{ fontSize: '11px', fontWeight: '800', color: sc.color }}>
+                                  {STEP_ICONS[t.status] || '📌'} {t.status}
+                                </span>
+                                <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600' }}>{t.date}</span>
+                              </div>
+                              {t.comment && (
+                                <p style={{ margin: 0, fontSize: '11px', color: '#475569', lineHeight: '1.5' }}>{t.comment}</p>
+                              )}
+                              {t.image && (
+                                <div style={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${sc.border}` }}>
+                                  <img src={t.image} alt={t.status} style={{ width: '100%', height: '100px', objectFit: 'cover', display: 'block' }} />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+            <div style={{ padding: '15px', borderTop: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {showAddField ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input placeholder="Label (e.g. Area)" value={newFieldLabel} onChange={(e) => setNewFieldLabel(e.target.value)} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #ddd', fontSize: '13px', width: '50%' }} />
+                    <input placeholder="Value (e.g. 100 sqft)" value={newFieldValue} onChange={(e) => setNewFieldValue(e.target.value)} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #ddd', fontSize: '13px', width: '50%' }} />
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={async () => {
+                      if (newFieldLabel && newFieldValue) {
+                        const customAttrs = {};
+                        Object.keys(selectedProject).forEach(k => {
+                          if (!STANDARD_KEYS.includes(k)) customAttrs[k] = selectedProject[k];
+                        });
+                        customAttrs[newFieldLabel] = newFieldValue;
+
+                        try {
+                          const res = await updateCustomAttributes(selectedProject.id, customAttrs);
+                          if (res && res.id) {
+                            alert(`A new project copy has been created (ID: ${res.id}) with the status 'Draft'.`);
+                            setSelectedProject({
+                              ...selectedProject,
+                              id: res.id,
+                              status: 'Draft',
+                              [newFieldLabel]: newFieldValue,
+                              custom_attributes: JSON.stringify(customAttrs)
+                            });
+                          } else {
+                            setSelectedProject({
+                              ...selectedProject,
+                              [newFieldLabel]: newFieldValue,
+                              custom_attributes: JSON.stringify(customAttrs)
+                            });
+                          }
+                          setShowAddField(false);
+                          setNewFieldLabel('');
+                          setNewFieldValue('');
+                          loadProjects(); // refresh map to ensure consistency
+                        } catch (e) {
+                          alert('Failed to save field: ' + e.message);
+                        }
+                      }
+                    }} style={{ flex: 1, padding: '8px', background: '#1a73e8', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Save Field</button>
+                    <button onClick={() => { setShowAddField(false); setNewFieldLabel(''); setNewFieldValue(''); }} style={{ flex: 1, padding: '8px', background: '#f1f5f9', color: '#333', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {['Approved', 'Work Started', 'Ongoing', 'Hold', 'Near Completion'].includes(selectedProject.status) && (
+                    <button onClick={() => {
+                      const NEXT = { 'Approved': 'Work Started', 'Work Started': 'Ongoing', 'Ongoing': 'Near Completion', 'Near Completion': 'Completed', 'Hold': 'Ongoing' };
+                      setTimelineStatus(NEXT[selectedProject.status] || 'Work Started');
+                      setTimelineDate(new Date().toISOString().split('T')[0]);
+                      setTimelineComment('');
+                      setTimelineImage(null);
+                      setShowStatusTimelinePopup(true);
+                    }} style={{ width: '100%', padding: '11px', background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(37,99,235,0.3)', letterSpacing: '0.3px' }}>
+                      📦 Update Progress
+                    </button>
+                  )}
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={() => setShowAddField(true)} style={{ flex: 1, padding: '10px', background: '#e8f0fe', color: '#1a73e8', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>➕ Add Field</button>
+                    <button onClick={() => setShowInitiatePopup(true)} style={{ flex: 1.2, padding: '10px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                      {selectedProject.status === 'Correction' ? '🚀 Resubmit Proposal' : '🚀 Initiate Proposal'}
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    {isEditing ? (
+                      <button onClick={async () => {
+                        try {
+                          const data = { ...selectedProject };
+                          delete data.coordinates;
+                          const res = await fetch('/api/method/frappe.client.set_value', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ doctype: 'GIS Project', name: selectedProject.id, fieldname: data })
+                          }).then(r => r.json());
+                          if (!res.exc) {
+                            alert('Project details updated successfully!');
+                            setIsEditing(false);
+                            loadProjects();
+                          } else {
+                            throw new Error(res.exc);
+                          }
+                        } catch (e) {
+                          alert('Failed to update project: ' + e.message);
+                        }
+                      }} style={{ flex: 1, padding: '10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>💾 Update Current</button>
+                    ) : (
+                      <button onClick={() => setIsEditing(true)} style={{ flex: 1, padding: '10px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Edit</button>
+                    )}
+                    <button onClick={async () => {
+                      if (window.confirm('Are you sure you want to delete this feature?')) {
+                        try {
+                          await deleteProject(selectedProject.id);
+                          setSelectedProject(null);
+                          loadProjects();
+                        } catch (e) {
+                          alert('Failed to delete: ' + e.message);
+                        }
+                      }
+                    }} style={{ flex: 1, padding: '10px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>🗑️ Delete</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Initiate Popup Overlay */}
+        {showInitiatePopup && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.4)', zIndex: 3000, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+            <div style={{ background: '#fff', padding: '20px', borderRadius: '12px', width: '300px', boxShadow: '0 4px 15px rgba(0,0,0,0.2)' }}>
+              <h3 style={{ margin: '0 0 15px 0', fontSize: '16px', color: '#333' }}>Initiate Proposal</h3>
+              <textarea
+                placeholder="Enter comments..."
+                value={initiateComment}
+                onChange={(e) => setInitiateComment(e.target.value)}
+                style={{ width: '100%', height: '80px', padding: '10px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '13px', resize: 'none', marginBottom: '15px' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                <span style={{ fontWeight: 600, color: '#64748b', fontSize: '13px' }}>Approver</span>
+                <span style={{ fontWeight: 700, color: '#0f172a', fontSize: '13px' }}>Executive Engineer</span>
+              </div>
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={(e) => setInitiateAttachment(e.target.files[0])}
+                style={{ width: '100%', marginBottom: '15px', fontSize: '13px' }}
+              />
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={async () => {
+                  try {
+                    const res = await submitWorkOrder(selectedProject.id, initiateComment, initiateAttachment, "Executive Engineer");
+                    if (res && res.id) {
+                      alert(`Initiated Proposal successfully! New ID: ${res.id}`);
+                      setSelectedProject(null);
+                      loadProjects();
+                    }
+                  } catch (e) {
+                    alert('Failed to initiate: ' + e.message);
+                  }
+                  setShowInitiatePopup(false);
+                  setInitiateComment('');
+                  setInitiateAttachment(null);
+                  setInitiateApprover('');
+                }} style={{ flex: 1, padding: '10px', background: '#1a73e8', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>Save</button>
+                <button onClick={() => {
+                  setShowInitiatePopup(false);
+                  setInitiateComment('');
+                  setInitiateAttachment(null);
+                  setInitiateApprover('');
+                }} style={{ flex: 1, padding: '10px', background: '#f1f5f9', color: '#333', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Status Update Popup Overlay — Amazon-style */}
+        {showStatusTimelinePopup && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)', zIndex: 3000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px' }}>
+            <div style={{ background: '#fff', borderRadius: '16px', width: '100%', maxWidth: '360px', boxShadow: '0 25px 50px rgba(0,0,0,0.25)', overflow: 'hidden' }}>
+              {/* Header */}
+              <div style={{ background: 'linear-gradient(135deg, #1e40af 0%, #2563eb 100%)', padding: '18px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '15px', color: '#fff', fontWeight: '800' }}>📦 Update Progress</h3>
+                  <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>{selectedProject?.name}</p>
+                </div>
+                <button onClick={() => { setShowStatusTimelinePopup(false); setTimelineComment(''); setTimelineImage(null); }} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: '28px', height: '28px', color: '#fff', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+              </div>
+
+              <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+                {/* Mini progress tracker inside dialog */}
+                {(() => {
+                  const backendStages = selectedProject.stages || [
+                    { status: 'Approved', label: 'Approved', icon: '📋', color: '#16a34a' },
+                    { status: 'Work Started', label: 'Work Started', icon: '🔨', color: '#2563eb' },
+                    { status: 'Ongoing', label: 'Ongoing', icon: '⚙️', color: '#7c3aed' },
+                    { status: 'Hold', label: 'On Hold', icon: '⏸', color: '#ef4444' },
+                    { status: 'Near Completion', label: 'Near Completion', icon: '🏁', color: '#0891b2' },
+                    { status: 'Completed', label: 'Completed', icon: '✅', color: '#16a34a' }
+                  ];
+                  // Exclude Approved as it is the starting point, not a progress stage
+                  const progressStages = backendStages.filter(s => s.status !== 'Approved');
+                  const STEPS = progressStages.map(s => s.status);
+                  const STEP_LABELS = {};
+                  const STEP_ICONS = {};
+                  const STEP_COLORS = {};
+                  progressStages.forEach(s => {
+                    STEP_LABELS[s.status] = s.label;
+                    STEP_ICONS[s.status] = s.icon;
+                    STEP_COLORS[s.status] = s.color;
+                  });
+
+                  const selIdx = STEPS.indexOf(timelineStatus);
+                  return (
+                    <div style={{ background: '#f8fafc', borderRadius: '12px', padding: '14px 10px 10px', border: '1px solid #e2e8f0' }}>
+                      <p style={{ margin: '0 0 10px 0', fontSize: '10px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', textAlign: 'center', letterSpacing: '0.5px' }}>Select Next Stage</p>
+                      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                        {STEPS.map((s, i) => {
+                          const done = i < selIdx;
+                          const active = i === selIdx;
+                          const col = done || active ? STEP_COLORS[s] : '#cbd5e1';
+                          return (
+                            <div key={s} onClick={() => setTimelineStatus(s)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', position: 'relative' }}>
+                              {i > 0 && (
+                                <div style={{ position: 'absolute', top: '13px', right: '50%', left: '-50%', height: '3px', background: done ? STEP_COLORS[s] : '#e2e8f0', zIndex: 0 }} />
+                              )}
+                              <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: done ? col : active ? col : '#f1f5f9', border: `3px solid ${col}`, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1, boxShadow: active ? `0 0 0 4px ${col}25` : 'none', transition: 'all 0.2s' }}>
+                                {done ? <span style={{ color: '#fff', fontSize: '12px', fontWeight: '800' }}>✓</span>
+                                  : <span style={{ fontSize: '11px' }}>{STEP_ICONS[s]}</span>}
+                              </div>
+                              <span style={{ fontSize: '8px', marginTop: '5px', fontWeight: active ? '800' : '500', color: active ? col : done ? '#475569' : '#94a3b8', textAlign: 'center', lineHeight: '1.2', maxWidth: '52px' }}>{STEP_LABELS[s] || s}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Date */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: '#64748b', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Date</label>
+                  <input
+                    type="date"
+                    value={timelineDate}
+                    onChange={(e) => setTimelineDate(e.target.value)}
+                    style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box', fontWeight: '600', color: '#0f172a' }}
+                  />
+                </div>
+
+                {/* Comment */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: '#64748b', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Comments</label>
+                  <textarea
+                    placeholder="Describe what happened at this stage..."
+                    value={timelineComment}
+                    onChange={(e) => setTimelineComment(e.target.value)}
+                    style={{ width: '100%', height: '75px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', resize: 'none', outline: 'none', boxSizing: 'border-box', color: '#334155', lineHeight: '1.5' }}
+                  />
+                </div>
+
+                {/* Image */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: '#64748b', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Milestone Photo</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 12px', border: '1.5px dashed #cbd5e1', borderRadius: '8px', cursor: 'pointer', background: '#f8fafc', fontSize: '12px', color: '#64748b', fontWeight: '600' }}>
+                    📷 {timelineImage ? timelineImage.name : 'Click to upload image'}
+                    <input type="file" accept="image/*" onChange={(e) => setTimelineImage(e.target.files[0])} style={{ display: 'none' }} />
+                  </label>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await addTimelineEntry(
+                          selectedProject.id,
+                          timelineStatus,
+                          timelineDate,
+                          timelineComment,
+                          timelineImage
+                        );
+                        if (res && res.success) {
+                          alert(`Project moved to '${res.status}' successfully!`);
+                          setSelectedProject(prev => {
+                            if (!prev) return null;
+                            return { ...prev, status: res.status, color: res.color, timeline: res.timeline };
+                          });
+                          loadProjects();
+                        }
+                      } catch (e) {
+                        alert('Failed to update status: ' + e.message, 'error');
+                      }
+                      setShowStatusTimelinePopup(false);
+                      setTimelineComment('');
+                      setTimelineImage(null);
+                    }}
+                    style={{ flex: 1, padding: '11px', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', fontSize: '13px', boxShadow: '0 4px 12px rgba(37,99,235,0.3)' }}
+                  >
+                    ✅ Save
+                  </button>
+                  <button
+                    onClick={() => { setShowStatusTimelinePopup(false); setTimelineComment(''); setTimelineImage(null); }}
+                    style={{ flex: 1, padding: '11px', background: '#f1f5f9', color: '#475569', border: '1.5px solid #e2e8f0', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={mapRef} style={{ height: '100%', width: '100%', zIndex: 1 }} />
+
+        {/* Custom Alert Modal */}
+        {customAlert && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(15, 23, 42, 0.4)',
+            backdropFilter: 'blur(8px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            animation: 'fadeIn 0.2s ease'
+          }}>
+            <style>{`
+              @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+              }
+              @keyframes scaleUp {
+                from { transform: scale(0.9); opacity: 0; }
+                to { transform: scale(1); opacity: 1; }
+              }
+              @keyframes bounceIn {
+                0% { transform: scale(0.3); opacity: 0; }
+                50% { transform: scale(1.05); }
+                70% { transform: scale(0.9); }
+                100% { transform: scale(1); opacity: 1; }
+              }
+            `}</style>
+            <div style={{
+              background: 'white',
+              width: '420px',
+              borderRadius: '24px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              border: '1px solid rgba(226, 232, 240, 0.8)',
+              padding: '28px',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '20px',
+              transform: 'scale(1)',
+              animation: 'scaleUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+            }}>
+              {/* Animated Icon */}
+              <div style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                background: customAlert.type === 'error' ? '#fef2f2' : '#f0fdf4',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '28px',
+                color: customAlert.type === 'error' ? '#ef4444' : '#22c55e',
+                boxShadow: customAlert.type === 'error' ? '0 0 0 8px #fee2e2' : '0 0 0 8px #dcfce7',
+                animation: 'bounceIn 0.5s ease',
+                fontWeight: 'bold'
+              }}>
+                {customAlert.type === 'error' ? '✕' : '✓'}
+              </div>
+
+              {/* Content */}
+              <div style={{ marginTop: '8px' }}>
+                <h3 style={{
+                  margin: 0,
+                  fontSize: '20px',
+                  fontWeight: '700',
+                  color: '#0f172a',
+                  fontFamily: "'Outfit', 'Inter', sans-serif"
+                }}>
+                  {customAlert.type === 'error' ? 'Operation Failed' : 'Success'}
+                </h3>
+                <p style={{
+                  margin: '8px 0 0 0',
+                  fontSize: '14px',
+                  color: '#64748b',
+                  lineHeight: '1.6',
+                  fontFamily: "'Inter', sans-serif"
+                }}>
+                  {customAlert.message}
+                </p>
+              </div>
+
+              {/* Action Button */}
+              <button
+                onClick={() => setCustomAlert(null)}
+                style={{
+                  width: '100%',
+                  padding: '12px 24px',
+                  borderRadius: '14px',
+                  border: 'none',
+                  background: customAlert.type === 'error' ? '#ef4444' : '#1a73e8',
+                  color: 'white',
+                  fontWeight: '600',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
+                  transition: 'all 0.2s',
+                  fontFamily: "'Inter', sans-serif"
+                }}
+                onMouseEnter={(e) => e.target.style.opacity = '0.9'}
+                onMouseLeave={(e) => e.target.style.opacity = '1'}
+              >
+                Okay
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

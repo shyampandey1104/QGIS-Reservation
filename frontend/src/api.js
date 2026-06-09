@@ -18,8 +18,12 @@ export function fetchPublicStats() {
   return call('get_public_stats')
 }
 
-export function fetchProjects(status = null) {
-  return call('get_projects', status ? { status } : {})
+export function fetchProjects(status = null, limit = null, omit_geometry = false) {
+  return call('get_projects', { status, limit, omit_geometry })
+}
+
+export function fetchProject(id) {
+  return call('get_project', { project_id: id })
 }
 
 export function fetchApprovedProjects() {
@@ -30,7 +34,7 @@ export function createProject(data) {
   return call('create_project', {
     project_name: data.name,
     road_name: data.road_name,
-    ward: data.ward,
+    ward: data.ward || "N/A",
     project_type: data.type,
     description: data.description,
     budget: data.budget,
@@ -39,6 +43,8 @@ export function createProject(data) {
     start_date: data.start_date || null,
     completion_date: data.completion_date || null,
     remarks: data.remarks,
+    color: data.color,
+    geom_type: data.geom_type,
     coordinates: JSON.stringify(data.coordinates),
     road_no: data.road_no,
     road_type: data.road_type,
@@ -53,8 +59,8 @@ export function createProject(data) {
   })
 }
 
-export function updateStatus(id, status) {
-  return call('update_status', { project_id: id, status })
+export function updateStatus(id, status, comment = null) {
+  return call('update_status', { project_id: id, status, comment })
 }
 
 export function deleteProject(id) {
@@ -79,3 +85,73 @@ export async function searchExternalLocations(query) {
     return []
   }
 }
+
+export async function manualUpload(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const res = await fetch(`${API}.upload_manual_data`, {
+    method: 'POST',
+    headers: { 'X-Frappe-CSRF-Token': 'fetch' },
+    credentials: 'include',
+    body: formData,
+  })
+  const data = await res.json()
+  if (data.exc) throw new Error(data.exc_type || 'Server error')
+  if (!res.ok) throw new Error(data.message || 'Request failed')
+  return data.message
+}
+
+export function updateCustomAttributes(id, attributes) {
+  return call('update_custom_attributes', { project_id: id, custom_attributes: attributes })
+}
+
+export async function submitWorkOrder(projectId, comment, file, approver) {
+  const formData = new FormData()
+  formData.append('project_id', projectId)
+  formData.append('comment', comment)
+  if (approver) {
+    formData.append('approver', approver)
+  }
+  if (file) {
+    formData.append('file', file)
+  }
+
+  const res = await fetch(`${API}.submit_work_order`, {
+    method: 'POST',
+    headers: { 'X-Frappe-CSRF-Token': 'fetch' },
+    credentials: 'include',
+    body: formData,
+  })
+  const data = await res.json()
+  if (data.exc) throw new Error(data.exc_type || 'Server error')
+  if (!res.ok) throw new Error(data.message || 'Request failed')
+  return data.message
+}
+
+export async function getPendingWorkOrdersCount() {
+  return call('get_pending_work_orders_count')
+}
+
+export async function addTimelineEntry(projectId, status, date, comment, file) {
+  const formData = new FormData()
+  formData.append('project_id', projectId)
+  formData.append('status', status)
+  formData.append('date', date)
+  formData.append('comment', comment || '')
+  if (file) {
+    formData.append('file', file)
+  }
+
+  const res = await fetch(`${API}.add_timeline_entry`, {
+    method: 'POST',
+    headers: { 'X-Frappe-CSRF-Token': 'fetch' },
+    credentials: 'include',
+    body: formData,
+  })
+  const data = await res.json()
+  if (data.exc) throw new Error(data.exc_type || 'Server error')
+  if (!res.ok) throw new Error(data.message || 'Request failed')
+  return data.message
+}
+

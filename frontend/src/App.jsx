@@ -5,6 +5,7 @@ import GISMap from './pages/GISMap'
 import Workflow from './pages/Workflow'
 import UsersRoles from './pages/UsersRoles'
 import PublicPortal from './pages/PublicPortal'
+import { getPendingWorkOrdersCount } from './api'
 import './App.css'
 
 const FRAPPE_BASE = ''
@@ -12,6 +13,7 @@ const FRAPPE_BASE = ''
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: '⊞' },
   { id: 'map',       label: 'GIS Map',   icon: '🗺' },
+  { id: 'live_map',  label: 'Live Project', icon: '🔴' },
   { id: 'workflow',  label: 'Workflow',  icon: '☰' },
   { id: 'users',     label: 'Users & Roles', icon: '👤' },
   { id: 'settings',  label: 'Settings',  icon: '⚙' },
@@ -20,7 +22,33 @@ const NAV_ITEMS = [
 export default function App() {
   const [view, setView] = useState('loading')
   const [userInfo, setUserInfo] = useState(null)
-  const [activePage, setActivePage] = useState('dashboard')
+  const [activePage, setActivePage] = useState(() => localStorage.getItem('gis_activePage') || 'dashboard')
+  const [requestTrigger, setRequestTrigger] = useState(0)
+  const [notificationCount, setNotificationCount] = useState(0)
+  const [liveFilterActive, setLiveFilterActive] = useState(false)
+
+  useEffect(() => {
+    if (!userInfo) return
+    const updateCount = async () => {
+      try {
+        const res = await getPendingWorkOrdersCount()
+        if (res && typeof res.count === 'number') {
+          setNotificationCount(res.count)
+        }
+      } catch (e) {
+        console.error("Failed to fetch notification count", e)
+      }
+    }
+    updateCount()
+    const interval = setInterval(updateCount, 15000)
+    return () => clearInterval(interval)
+  }, [userInfo])
+
+  useEffect(() => {
+    if (activePage) {
+      localStorage.setItem('gis_activePage', activePage)
+    }
+  }, [activePage])
 
   useEffect(() => {
     fetch(`${FRAPPE_BASE}/api/method/qgis.api.gis_project.get_current_user_role`, {
@@ -90,7 +118,7 @@ export default function App() {
   const renderPage = () => {
     switch (activePage) {
       case 'dashboard': return <Dashboard userInfo={userInfo} onNavigate={setActivePage} />
-      case 'map':       return <GISMap userInfo={userInfo} />
+      case 'map':       return <GISMap userInfo={userInfo} requestTrigger={requestTrigger} liveFilterActive={liveFilterActive} setLiveFilterActive={setLiveFilterActive} />
       case 'workflow':  return <Workflow userInfo={userInfo} />
       case 'users':     return <UsersRoles userInfo={userInfo} />
       case 'settings':  return <div style={{ padding: '32px', color: '#555' }}>Settings — Coming Soon</div>
@@ -125,7 +153,7 @@ export default function App() {
 
         {/* New Request button */}
         <div style={{ padding: '14px 12px 8px' }}>
-          <button onClick={() => setActivePage('map')} style={{
+          <button onClick={() => { setActivePage('map'); setRequestTrigger(t => t + 1); }} style={{
             width: '100%', padding: '9px', background: '#2563eb', color: 'white',
             border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 600,
             fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
@@ -136,20 +164,42 @@ export default function App() {
 
         {/* Nav items */}
         <nav style={{ flex: 1, padding: '4px 8px' }}>
-          {NAV_ITEMS.map(item => (
-            <button key={item.id} onClick={() => setActivePage(item.id)} style={{
-              width: '100%', padding: '10px 12px', marginBottom: '2px',
-              background: activePage === item.id ? 'rgba(255,255,255,0.1)' : 'transparent',
-              color: activePage === item.id ? 'white' : 'rgba(255,255,255,0.6)',
-              border: 'none', borderRadius: '8px', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '10px',
-              fontSize: '13px', fontWeight: activePage === item.id ? 600 : 400,
-              textAlign: 'left',
-            }}>
-              <span style={{ fontSize: '15px', width: '18px', textAlign: 'center' }}>{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
+          {NAV_ITEMS.map(item => {
+            const isActive = item.id === 'map' 
+              ? (activePage === 'map' && !liveFilterActive)
+              : item.id === 'live_map'
+                ? (activePage === 'map' && liveFilterActive)
+                : (activePage === item.id);
+                
+            return (
+              <button 
+                key={item.id} 
+                onClick={() => {
+                  if (item.id === 'map') {
+                    setActivePage('map');
+                    setLiveFilterActive(false);
+                  } else if (item.id === 'live_map') {
+                    setActivePage('map');
+                    setLiveFilterActive(true);
+                  } else {
+                    setActivePage(item.id);
+                  }
+                }} 
+                style={{
+                  width: '100%', padding: '10px 12px', marginBottom: '2px',
+                  background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
+                  color: isActive ? 'white' : 'rgba(255,255,255,0.6)',
+                  border: 'none', borderRadius: '8px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  fontSize: '13px', fontWeight: isActive ? 600 : 400,
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ fontSize: '15px', width: '18px', textAlign: 'center' }}>{item.icon}</span>
+                {item.label}
+              </button>
+            );
+          })}
         </nav>
 
         {/* User info at bottom */}
@@ -178,7 +228,43 @@ export default function App() {
 
       {/* Main content */}
       <div style={{ flex: 1, overflow: 'hidden', background: '#f4f6f9', display: 'flex', flexDirection: 'column' }}>
-        {renderPage()}
+        {/* Top Header */}
+        <div style={{ height: '56px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', flexShrink: 0 }}>
+          <div style={{ fontSize: '15px', fontWeight: 600, color: '#1e293b', textTransform: 'capitalize' }}>
+            {activePage === 'map' ? (liveFilterActive ? 'Live Projects Map' : 'GIS Map') : activePage}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+            {/* Bell Icon Notification */}
+            <div 
+              style={{ position: 'relative', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '36px', height: '36px', borderRadius: '50%', background: '#f1f5f9', transition: 'background 0.2s' }} 
+              onClick={() => setActivePage('workflow')}
+              title={`${notificationCount} pending work orders`}
+            >
+              <span style={{ fontSize: '18px' }}>🔔</span>
+              {notificationCount > 0 && (
+                <span style={{
+                  position: 'absolute', top: '-2px', right: '-2px',
+                  background: '#ef4444', color: 'white', fontSize: '9px',
+                  fontWeight: 'bold', borderRadius: '50%', width: '16px', height: '16px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 0 0 2px white'
+                }}>
+                  {notificationCount}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>Role:</span>
+              <strong style={{ color: '#0f172a', background: '#eff6ff', padding: '4px 8px', borderRadius: '6px', border: '1px solid #bfdbfe' }}>
+                {userInfo?.role || 'Guest'}
+              </strong>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {renderPage()}
+        </div>
       </div>
     </div>
   )

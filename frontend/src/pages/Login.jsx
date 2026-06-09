@@ -3,19 +3,12 @@ import { fetchPublicStats } from '../api'
 
 const FRAPPE_BASE = ''
 
-const ROLES = [
-  'GIS Junior Engineer',
-  'GIS Assistant Engineer',
-  'GIS Senior Engineer',
-  'GIS Department Head',
-  'System Manager',
-]
-
 export default function Login({ onLogin, onBack }) {
-  const [form, setForm] = useState({ usr: '', pwd: '', role: 'GIS Junior Engineer' })
+  const [form, setForm] = useState({ usr: '', pwd: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [stats, setStats] = useState(null)
+  const [showPassword, setShowPassword] = useState(false)
 
   useEffect(() => {
     fetchPublicStats()
@@ -127,23 +120,6 @@ export default function Login({ onLogin, onBack }) {
           </p>
 
           <form onSubmit={handleLogin}>
-            {/* Role */}
-            <div style={{ marginBottom: '18px' }}>
-              <label style={{ fontSize: '13px', fontWeight: 700, color: '#374151', display: 'block', marginBottom: '7px' }}>Role</label>
-              <div style={{ position: 'relative' }}>
-                <select
-                  value={form.role}
-                  onChange={e => setForm({ ...form, role: e.target.value })}
-                  style={{ ...inputStyle, appearance: 'none', paddingRight: '36px', cursor: 'pointer', fontWeight: 500 }}
-                >
-                  {ROLES.map(r => (
-                    <option key={r} value={r}>{r.replace('GIS ', '')}</option>
-                  ))}
-                </select>
-                <span style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#9ca3af', fontSize: '12px' }}>▼</span>
-              </div>
-            </div>
-
             {/* Email */}
             <div style={{ marginBottom: '18px' }}>
               <label style={{ fontSize: '13px', fontWeight: 700, color: '#374151', display: 'block', marginBottom: '7px' }}>Email / Username</label>
@@ -162,16 +138,42 @@ export default function Login({ onLogin, onBack }) {
             {/* Password */}
             <div style={{ marginBottom: '28px' }}>
               <label style={{ fontSize: '13px', fontWeight: 700, color: '#374151', display: 'block', marginBottom: '7px' }}>Password</label>
-              <input
-                type="password"
-                placeholder="Enter your password"
-                value={form.pwd}
-                onChange={e => setForm({ ...form, pwd: e.target.value })}
-                required
-                style={inputStyle}
-                onFocus={e => e.target.style.borderColor = '#2563eb'}
-                onBlur={e => e.target.style.borderColor = '#e5e7eb'}
-              />
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Enter your password"
+                  value={form.pwd}
+                  onChange={e => setForm({ ...form, pwd: e.target.value })}
+                  required
+                  style={{ ...inputStyle, paddingRight: '40px' }}
+                  onFocus={e => e.target.style.borderColor = '#2563eb'}
+                  onBlur={e => e.target.style.borderColor = '#e5e7eb'}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#9ca3af',
+                    padding: '0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {showPassword ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                  )}
+                </button>
+              </div>
             </div>
 
             {error && (

@@ -8,17 +8,21 @@ import { fetchProjects, createProject, updateStatus, deleteProject } from '../ap
 const PROJECT_TYPES = ['Road Construction', 'Drainage Work', 'Water Pipeline', 'Other Infrastructure']
 
 const STATUS_COLORS = {
-  Draft:     { bg: '#fff8e1', color: '#f57f17' },
-  Submitted: { bg: '#e3f2fd', color: '#1565c0' },
-  Approved:  { bg: '#e8f5e9', color: '#2e7d32' },
-  Rejected:  { bg: '#fce4ec', color: '#c62828' },
+  Draft:                 { bg: '#eff6ff', color: '#2563eb' }, // Blue
+  'Pending for Request': { bg: '#fff7ed', color: '#ea580c' }, // Orange
+  Correction:            { bg: '#fff1f2', color: '#e11d48' }, // Red-orange
+  Submitted:             { bg: '#eff6ff', color: '#2563eb' }, // Blue
+  Approved:              { bg: '#f0fdf4', color: '#16a34a' }, // Green
+  Rejected:              { bg: '#fef2f2', color: '#dc2626' }, // Red
 }
 
 const POLYGON_COLORS = {
-  Draft:     '#f57f17',
-  Submitted: '#1565c0',
-  Approved:  '#2e7d32',
-  Rejected:  '#c62828',
+  Draft:                 '#2563eb', // Blue
+  'Pending for Request': '#ea580c', // Orange
+  Correction:            '#e11d48', // Red-orange
+  Submitted:             '#ea580c', // Orange
+  Approved:              '#16a34a', // Green
+  Rejected:              '#dc2626', // Red
 }
 
 // Which status actions each role can take
@@ -49,6 +53,16 @@ export default function InternalPortal({ userInfo, onLogout }) {
   const [activeTab, setActiveTab] = useState('map')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [customAlert, setCustomAlert] = useState(null)
+
+  const alert = (message, type = 'success') => {
+    let alertType = type;
+    const msgLower = String(message).toLowerCase();
+    if (msgLower.includes('failed') || msgLower.includes('error') || msgLower.includes('missing') || msgLower.includes('exception') || msgLower.includes('please')) {
+      alertType = 'error';
+    }
+    setCustomAlert({ type: alertType, message: String(message) });
+  };
 
   const role = userInfo?.role || ''
   const roleActions = ROLE_ACTIONS[role] || {}
@@ -400,8 +414,118 @@ export default function InternalPortal({ userInfo, onLogout }) {
           <div style={{ position: 'absolute', top: '10px', right: '10px', background: 'white', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', color: '#555', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', zIndex: 1000 }}>
             Use polygon tool (top-left) to draw a project area
           </div>
-        )}
-      </div>
+      {/* Premium Custom Alert Modal */}
+      {customAlert && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.4)',
+          backdropFilter: 'blur(8px)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          animation: 'fadeIn 0.2s ease'
+        }}>
+          <style>{`
+            @keyframes fadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes scaleUp {
+              from { transform: scale(0.9); opacity: 0; }
+              to { transform: scale(1); opacity: 1; }
+            }
+            @keyframes bounceIn {
+              0% { transform: scale(0.3); opacity: 0; }
+              50% { transform: scale(1.05); }
+              70% { transform: scale(0.9); }
+              100% { transform: scale(1); opacity: 1; }
+            }
+          `}</style>
+          <div style={{
+            background: 'white',
+            width: '420px',
+            borderRadius: '24px',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            border: '1px solid rgba(226, 232, 240, 0.8)',
+            padding: '28px',
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '20px',
+            transform: 'scale(1)',
+            animation: 'scaleUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+          }}>
+            {/* Animated Icon */}
+            <div style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              background: customAlert.type === 'error' ? '#fef2f2' : '#f0fdf4',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '28px',
+              color: customAlert.type === 'error' ? '#ef4444' : '#22c55e',
+              boxShadow: customAlert.type === 'error' ? '0 0 0 8px #fee2e2' : '0 0 0 8px #dcfce7',
+              animation: 'bounceIn 0.5s ease',
+              fontWeight: 'bold'
+            }}>
+              {customAlert.type === 'error' ? '✕' : '✓'}
+            </div>
+
+            {/* Content */}
+            <div style={{ marginTop: '8px' }}>
+              <h3 style={{
+                margin: 0,
+                fontSize: '20px',
+                fontWeight: '700',
+                color: '#0f172a',
+                fontFamily: "'Outfit', 'Inter', sans-serif"
+              }}>
+                {customAlert.type === 'error' ? 'Operation Failed' : 'Success'}
+              </h3>
+              <p style={{
+                margin: '8px 0 0 0',
+                fontSize: '14px',
+                color: '#64748b',
+                lineHeight: '1.6',
+                fontFamily: "'Inter', sans-serif"
+              }}>
+                {customAlert.message}
+              </p>
+            </div>
+
+            {/* Action Button */}
+            <button
+              onClick={() => setCustomAlert(null)}
+              style={{
+                width: '100%',
+                padding: '12px 24px',
+                borderRadius: '14px',
+                border: 'none',
+                background: customAlert.type === 'error' ? '#ef4444' : '#1a73e8',
+                color: 'white',
+                fontWeight: '600',
+                fontSize: '14px',
+                cursor: 'pointer',
+                boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
+                transition: 'all 0.2s',
+                fontFamily: "'Inter', sans-serif"
+              }}
+              onMouseEnter={(e) => e.target.style.opacity = '0.9'}
+              onMouseLeave={(e) => e.target.style.opacity = '1'}
+            >
+              Okay
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

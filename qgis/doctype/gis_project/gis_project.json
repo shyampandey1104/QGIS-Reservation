@@ -11,6 +11,7 @@
   "ward",
   "project_type",
   "status",
+  "color",
   "submitted_by_role",
   "col_break_1",
   "budget",
@@ -72,12 +73,19 @@
    "label": "Project Type"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Draft\nSubmitted\nApproved\nRejected",
+   "options": "Draft\nSubmitted\nApproved\nRejected\nPending for Request\nCorrection",
    "default": "Draft"
+  },
+  {
+   "fieldname": "color",
+   "fieldtype": "Color",
+   "label": "Layer Color",
+   "default": "#2563eb"
   },
   {
    "fieldname": "submitted_by_role",

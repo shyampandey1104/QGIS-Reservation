@@ -1,30 +1,55 @@
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { fetchProjects } from '../api'
+import { fetchProjects, fetchPublicStats } from '../api'
 
 const STATUS_COLORS = {
-  Draft:     { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' },
-  Submitted: { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
-  Approved:  { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
-  Rejected:  { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  Draft:                 { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' }, // Blue
+  'Pending for Request': { bg: '#fff7ed', color: '#ea580c', border: '#fde68a' }, // Orange
+  Correction:            { bg: '#fff1f2', color: '#e11d48', border: '#fecaca' }, // Red-orange
+  Submitted:             { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' }, // Blue
+  Approved:              { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Rejected:              { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' }, // Red
 }
 
 const POLYGON_COLORS = {
-  Draft: '#94a3b8', Submitted: '#2563eb', Approved: '#16a34a', Rejected: '#dc2626',
+  Draft:                 '#2563eb', // Blue
+  'Pending for Request': '#ea580c', // Orange
+  Correction:            '#e11d48', // Red-orange
+  Submitted:             '#ea580c', // Orange
+  Approved:              '#16a34a', // Green
+  Rejected:              '#dc2626', // Red
 }
 
 export default function Dashboard({ userInfo, onNavigate }) {
   const mapRef = useRef(null)
   const mapInstanceRef = useRef(null)
   const [projects, setProjects] = useState([])
+  const [mapProjects, setMapProjects] = useState([])
+  const [statsData, setStatsData] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchProjects()
-      .then(setProjects)
-      .catch(() => setProjects([]))
-      .finally(() => setLoading(false))
+    const loadData = async () => {
+      setLoading(true)
+      try {
+        const [stats, list, mapData] = await Promise.all([
+          fetchPublicStats(),
+          fetchProjects(null, 10, true),
+          fetchProjects(null, 100, false)
+        ])
+        console.log("Stats Data:", stats)
+        console.log("Projects List:", list)
+        setStatsData(stats)
+        setProjects(list)
+        setMapProjects(mapData)
+      } catch (e) {
+        console.error("Dashboard load failed", e)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadData()
   }, [])
 
   useEffect(() => {
@@ -38,37 +63,39 @@ export default function Dashboard({ userInfo, onNavigate }) {
 
   useEffect(() => {
     const map = mapInstanceRef.current
-    if (!map || projects.length === 0) return
-    projects.forEach(p => {
+    if (!map || mapProjects.length === 0) return
+    
+    const group = L.featureGroup().addTo(map)
+    mapProjects.forEach(p => {
       if (!p.coordinates?.length) return
       const color = POLYGON_COLORS[p.status] || '#94a3b8'
-      L.polygon(p.coordinates, { color, fillColor: color, fillOpacity: 0.3, weight: 2 })
-        .bindTooltip(p.name, { sticky: true })
-        .addTo(map)
+      const geomType = p.geom_type || 'Polygon'
+      
+      try {
+        let layer;
+        if (geomType === 'Point' || typeof p.coordinates[0] === 'number') {
+          layer = L.circleMarker(p.coordinates, { color, fillColor: color, fillOpacity: 0.8, radius: 5 })
+        } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
+          layer = L.polyline(p.coordinates, { color, weight: 3 })
+        } else {
+          layer = L.polygon(p.coordinates, { color, fillColor: color, fillOpacity: 0.3, weight: 2 })
+        }
+        layer.bindTooltip(p.name, { sticky: true }).addTo(group)
+      } catch (e) {
+        console.error("Failed to render geometry for project", p.name, e)
+      }
     })
-  }, [projects])
 
-  const stats = {
-    total:    projects.length,
-    approved: projects.filter(p => p.status === 'Approved').length,
-    review:   projects.filter(p => p.status === 'Submitted').length,
-    budget:   projects.reduce((sum, p) => {
-      const n = parseFloat((p.budget || '0').replace(/[^0-9.]/g, ''))
-      return sum + (isNaN(n) ? 0 : n)
-    }, 0),
-  }
-
-  const formatBudget = (n) => {
-    if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`
-    if (n >= 100000)   return `₹${(n / 100000).toFixed(1)}L`
-    return `₹${n.toLocaleString()}`
-  }
+    if (group.getLayers().length > 0) {
+       map.fitBounds(group.getBounds(), { padding: [20, 20] })
+    }
+  }, [mapProjects])
 
   const STAT_CARDS = [
-    { label: 'Total Projects', value: loading ? '—' : stats.total,              icon: '📋', color: '#2563eb' },
-    { label: 'Approved',       value: loading ? '—' : stats.approved,           icon: '✅', color: '#16a34a' },
-    { label: 'Under Review',   value: loading ? '—' : stats.review,             icon: '🕐', color: '#f59e0b' },
-    { label: 'Total Budget',   value: loading ? '—' : formatBudget(stats.budget), icon: '₹', color: '#8b5cf6' },
+    { label: 'Total Projects', value: loading ? '—' : (statsData?.total || 0),              icon: '📋', color: '#2563eb' },
+    { label: 'Approved',       value: loading ? '—' : (statsData?.approved || 0),           icon: '✅', color: '#16a34a' },
+    { label: 'Under Review',   value: loading ? '—' : (statsData?.submitted || 0),          icon: '🕐', color: '#f59e0b' },
+    { label: 'Total Budget',   value: loading ? '—' : (statsData?.total_budget_formatted || '₹0'), icon: '₹', color: '#8b5cf6' },
   ]
 
   return (
