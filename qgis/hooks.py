@@ -257,5 +257,23 @@ fixtures = [
         ]
     },
     "Custom Field",
-    "Property Setter"
+    "Property Setter",
+    {
+        "dt": "Role",
+        "filters": [
+            ["name", "in", [
+                "Muncipal Commissioner",
+                "City Engineer",
+                "Executive Engineer",
+                "Chief Engineer",
+                "Road Department",
+                "GIS Junior Engineer",
+                "GIS Senior Engineer",
+                "GIS Department Head",
+                "GIS Assistant Engineer"
+            ]]
+        ]
+    },
+    "Custom DocPerm",
+    "Workflow"
 ]
