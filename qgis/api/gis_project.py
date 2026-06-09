@@ -755,7 +755,8 @@ def upload_manual_data(ward="Manual Upload", project_type="Other Infrastructure"
         
         for fpath in files_to_process:
             # 1. Get List of Layers
-            info_cmd = ["/opt/homebrew/bin/ogrinfo", "-ro", "-q", fpath]
+            ogrinfo_path = shutil.which("ogrinfo") or "/usr/bin/ogrinfo"
+            info_cmd = [ogrinfo_path, "-ro", "-q", fpath]
             try:
                 info_res = subprocess.run(info_cmd, capture_output=True, text=True, check=True)
             except subprocess.CalledProcessError as e:
@@ -783,7 +784,8 @@ def upload_manual_data(ward="Manual Upload", project_type="Other Infrastructure"
 
             # 2. Extract and SAVE each feature to GIS Project DocType
             for layer in layer_names:
-                cmd = ["/opt/homebrew/bin/ogr2ogr", "-f", "GeoJSON", "-t_srs", "EPSG:4326", "/vsistdout/", fpath, layer]
+                ogr2ogr_path = shutil.which("ogr2ogr") or "/usr/bin/ogr2ogr"
+                cmd = [ogr2ogr_path, "-f", "GeoJSON", "-t_srs", "EPSG:4326", "/vsistdout/", fpath, layer]
                 try:
                     out = subprocess.run(cmd, capture_output=True, text=True)
                     if not out.stdout.strip():
