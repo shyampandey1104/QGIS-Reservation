@@ -55,7 +55,11 @@ export default function App() {
       credentials: 'include',
       headers: { 'X-Frappe-CSRF-Token': 'fetch' },
     })
-      .then(r => r.json())
+      .then(r => {
+        const token = r.headers.get('x-frappe-csrf-token')
+        if (token) window.csrf_token = token
+        return r.json()
+      })
       .then(data => {
         if (data.message?.role) {
           setUserInfo(data.message)

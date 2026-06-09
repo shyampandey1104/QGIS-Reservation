@@ -2,12 +2,16 @@ const FRAPPE_BASE = ''
 const API = `${FRAPPE_BASE}/api/method/qgis.api.gis_project`
 
 async function call(method, params = {}) {
+  const headers = { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' }
   const res = await fetch(`${API}.${method}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': 'fetch' },
+    headers,
     credentials: 'include',
     body: JSON.stringify(params),
   })
+  // Always capture new CSRF token if server returns one
+  const newToken = res.headers.get('x-frappe-csrf-token')
+  if (newToken) window.csrf_token = newToken
   const data = await res.json()
   if (data.exc) throw new Error(data.exc_type || 'Server error')
   if (!res.ok) throw new Error(data.message || 'Request failed')

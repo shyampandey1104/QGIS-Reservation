@@ -33,13 +33,18 @@ export default function Login({ onLogin, onBack }) {
         credentials: 'include',
         body: JSON.stringify({ usr: form.usr, pwd: form.pwd }),
       })
+      // Capture fresh CSRF token from login response
+      const loginToken = res.headers.get('x-frappe-csrf-token')
+      if (loginToken) window.csrf_token = loginToken
       const data = await res.json()
       if (!res.ok) { setError(data.message || 'Invalid credentials'); return }
 
       const roleRes = await fetch(
         `${FRAPPE_BASE}/api/method/qgis.api.gis_project.get_current_user_role`,
-        { credentials: 'include', headers: { 'X-Frappe-CSRF-Token': 'fetch' } }
+        { credentials: 'include', headers: { 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' } }
       )
+      const roleToken = roleRes.headers.get('x-frappe-csrf-token')
+      if (roleToken) window.csrf_token = roleToken
       const roleData = await roleRes.json()
       if (!roleData.message?.role) {
         setError('Login successful but no GIS role assigned. Contact admin.')
