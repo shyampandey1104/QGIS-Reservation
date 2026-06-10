@@ -388,18 +388,16 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         categoryGroupsRef.current[p.type] = L.featureGroup()
       }
 
+      // Always force green for post-approval statuses, dark green for Completed
       let color = p.color || '#1a73e8'
-      if (p.status === 'Pending for Request') {
+      if (p.status === 'Completed') {
+        color = '#14532d' // Dark Green for completed
+      } else if (['Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion'].includes(p.status)) {
+        color = '#16a34a' // Always Green for approved & all post-approval statuses
+      } else if (p.status === 'Pending for Request') {
         color = '#f97316' // Vibrant Orange for pending features
-      } else {
-        const isDefaultColor = !p.color || p.color.toLowerCase() === '#1a73e8' || p.color.toLowerCase() === '#2563eb' || p.color.toLowerCase() === '#2c3e50';
-        if (isDefaultColor) {
-          if (p.status === 'Completed') {
-            color = '#14532d' // Dark Green for completed
-          } else if (['Submitted', 'Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion'].includes(p.status)) {
-            color = '#16a34a' // Green for approved & all post-approval statuses
-          }
-        }
+      } else if (p.status === 'Submitted') {
+        color = '#2563eb' // Blue for submitted
       }
       let layer;
       if (!p.coordinates || p.coordinates.length === 0) return;
@@ -934,7 +932,30 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                                   <span>{selectedProject.wo_id}</span>
                                 </div>
                               )}
-                              {!selectedProject.approver && !selectedProject.wo_comment && !selectedProject.wo_id && (
+                              {selectedProject.wo_attachment && (
+                                <div style={{ marginTop: '6px' }}>
+                                  <span style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '6px', letterSpacing: '0.5px' }}>Attachment / Photos</span>
+                                  {(() => {
+                                    const url = selectedProject.wo_attachment;
+                                    const isImg = /\.(jpg|jpeg|png|gif|webp|svg)($|\?)/i.test(url);
+                                    if (isImg) {
+                                      return (
+                                        <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid #cbd5e1', cursor: 'zoom-in', position: 'relative', height: '100px', width: '150px' }}
+                                             onClick={() => window.open(url, '_blank')}>
+                                          <img src={url} alt="work-order-attachment" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                                        </div>
+                                      );
+                                    } else {
+                                      return (
+                                        <a href={url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#2563eb', fontWeight: '600', textDecoration: 'none', fontSize: '11px' }}>
+                                          📄 View Document
+                                        </a>
+                                      );
+                                    }
+                                  })()}
+                                </div>
+                              )}
+                              {!selectedProject.approver && !selectedProject.wo_comment && !selectedProject.wo_id && !selectedProject.wo_attachment && (
                                 <div style={{ color: '#94a3b8', fontStyle: 'italic', textAlign: 'center', padding: '10px' }}>No initial approval notes recorded.</div>
                               )}
                             </div>
@@ -946,7 +967,21 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                               
                               {/* Multi-image / Single image render */}
                               {(() => {
-                                const imgs = activeLog.images || (activeLog.image ? [activeLog.image] : []);
+                                let imgs = [];
+                                if (activeLog.images) {
+                                  if (Array.isArray(activeLog.images)) {
+                                    imgs = activeLog.images;
+                                  } else if (typeof activeLog.images === 'string') {
+                                    try {
+                                      imgs = JSON.parse(activeLog.images);
+                                    } catch (e) {
+                                      imgs = [activeLog.images];
+                                    }
+                                  }
+                                } else if (activeLog.image) {
+                                  imgs = [activeLog.image];
+                                }
+                                imgs = imgs.filter(img => typeof img === 'string' && img.trim() !== '');
                                 if (imgs.length === 0) return null;
                                 return (
                                   <div style={{ marginTop: '4px' }}>

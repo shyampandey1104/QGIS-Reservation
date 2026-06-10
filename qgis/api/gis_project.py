@@ -1153,28 +1153,41 @@ def add_timeline_entry():
     status = frappe.form_dict.get('status')
     date = frappe.form_dict.get('date')
     comment = frappe.form_dict.get('comment')
+    existing_images_str = frappe.form_dict.get('existing_images') or '[]'
     
     if not project_id or not status:
         frappe.throw("Project ID and Status are required")
         
     doc = frappe.get_doc("GIS Project", project_id)
     
-    file_url = None
+    # Process newly uploaded files
+    file_urls = []
     if 'file' in frappe.request.files:
         from frappe.utils.file_manager import save_file
-        uploaded_file = frappe.request.files['file']
-        file_content = uploaded_file.read()
-        file_name = uploaded_file.filename
+        # Get all files uploaded under 'file' key
+        files_list = frappe.request.files.getlist('file')
+        for uploaded_file in files_list:
+            file_content = uploaded_file.read()
+            file_name = uploaded_file.filename
+            if file_content:
+                file_doc = save_file(
+                    file_name, 
+                    file_content, 
+                    "GIS Project", 
+                    project_id, 
+                    is_private=0,
+                    decode=False
+                )
+                file_urls.append(file_doc.file_url)
+
+    # Process existing images that the user decided to keep
+    try:
+        images_list = json.loads(existing_images_str)
+    except Exception:
+        images_list = []
         
-        file_doc = save_file(
-            file_name, 
-            file_content, 
-            "GIS Project", 
-            project_id, 
-            is_private=0,
-            decode=False
-        )
-        file_url = file_doc.file_url
+    # Combine existing and new images
+    images_list.extend(file_urls)
 
     # Read existing timeline
     timeline_str = doc.get("timeline")
@@ -1185,25 +1198,39 @@ def add_timeline_entry():
         except Exception:
             pass
             
-    # Append new entry
+    # Find and update or append entry
     from frappe.utils import now_datetime
-    entry = {
-        "status": status,
-        "date": date,
-        "comment": comment or "",
-        "image": file_url or "",
-        "created_at": str(now_datetime())
-    }
-    timeline_list.append(entry)
+    updated = False
+    for entry in timeline_list:
+        if entry.get("status") == status:
+            entry["date"] = date
+            entry["comment"] = comment or ""
+            entry["images"] = images_list
+            entry["image"] = images_list[0] if images_list else ""
+            entry["created_at"] = str(now_datetime())
+            updated = True
+            break
+            
+    if not updated:
+        entry = {
+            "status": status,
+            "date": date,
+            "comment": comment or "",
+            "image": images_list[0] if images_list else "",
+            "images": images_list,
+            "created_at": str(now_datetime())
+        }
+        timeline_list.append(entry)
     
     # Map status to color
     COLOR_MAP = {
         "Approved": "#16a34a",
-        "Work Started": "#3b82f6",
-        "Ongoing": "#4f46e5",
-        "Hold": "#ef4444",
-        "Near Completion": "#06b6d4",
-        "Completed": "#10b981",
+        "Work Started": "#16a34a",
+        "Ongoing": "#16a34a",
+        "On Hold": "#16a34a",
+        "Hold": "#16a34a",
+        "Near Completion": "#16a34a",
+        "Completed": "#14532d",
     }
     color = COLOR_MAP.get(status, doc.color or "#16a34a")
     
