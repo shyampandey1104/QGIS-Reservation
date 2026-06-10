@@ -250,7 +250,7 @@ def get_public_stats():
         fields=["status", "ward", "budget"],
         ignore_permissions=True
     )
-    approved = [p for p in all_projects if p["status"] == "Approved"]
+    approved = [p for p in all_projects if p["status"] in ["Approved", "Work Started", "Ongoing", "On Hold", "Hold", "Near Completion", "Completed"]]
 
     # Count unique wards
     wards = set(p["ward"] for p in all_projects if p.get("ward"))
@@ -295,9 +295,9 @@ def get_projects(status=None, limit=None, omit_geometry=False):
 
 
 
-    # Non-logged-in users only see approved
+    # Non-logged-in users only see approved and post-approval statuses
     if frappe.session.user == "Guest":
-        filters["status"] = "Approved"
+        filters["status"] = ["in", ["Approved", "Work Started", "Ongoing", "On Hold", "Hold", "Near Completion", "Completed"]]
 
     if limit:
         limit = int(limit)
@@ -403,7 +403,9 @@ def get_projects(status=None, limit=None, omit_geometry=False):
 
 @frappe.whitelist(allow_guest=True)
 def get_approved_projects():
-    return get_projects(status="Approved")
+    # Public portal should see all projects that are Approved, Work Started, Ongoing, On Hold/Hold, Near Completion, Completed
+    statuses = ["Approved", "Work Started", "Ongoing", "On Hold", "Hold", "Near Completion", "Completed"]
+    return get_projects(status=",".join(statuses))
 
 
 @frappe.whitelist()

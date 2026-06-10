@@ -10,6 +10,20 @@ const TYPE_COLORS = {
   'Other Infrastructure': '#f39c12',
 }
 
+const STATUS_COLORS = {
+  Draft:                 { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' },
+  Submitted:             { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
+  Approved:              { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Rejected:              { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  'Pending for Request': { bg: '#fef3c7', color: '#d97706', border: '#fde68a' },
+  'Work Started':        { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Ongoing:               { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  'On Hold':             { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Hold:                  { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  'Near Completion':     { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
+  Completed:             { bg: '#dcfce7', color: '#14532d', border: '#86efac' }, // Dark Green
+}
+
 export default function PublicPortal() {
   const mapRef = useRef(null)
   const mapInstanceRef = useRef(null)
@@ -199,9 +213,24 @@ export default function PublicPortal() {
                   <div style={{ color: '#333', lineHeight: '1.4' }}>{value}</div>
                 </div>
               ))}
-              <div style={{ display: 'inline-block', marginTop: '4px', fontSize: '11px', padding: '3px 10px', borderRadius: '10px', background: '#e8f5e9', color: '#2e7d32', fontWeight: 600 }}>
-                Approved
-              </div>
+              {(() => {
+                const sc = STATUS_COLORS[selectedProject.status] || STATUS_COLORS.Approved;
+                return (
+                  <div style={{
+                    display: 'inline-block',
+                    marginTop: '4px',
+                    fontSize: '11px',
+                    padding: '3px 10px',
+                    borderRadius: '10px',
+                    background: sc.bg,
+                    color: sc.color,
+                    border: `1px solid ${sc.border || 'transparent'}`,
+                    fontWeight: 600
+                  }}>
+                    {selectedProject.status || 'Approved'}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
