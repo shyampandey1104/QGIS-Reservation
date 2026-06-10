@@ -93,7 +93,28 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
   const [timelineStatus, setTimelineStatus] = useState('Work Started')
   const [timelineDate, setTimelineDate] = useState(() => new Date().toISOString().split('T')[0])
   const [timelineComment, setTimelineComment] = useState('')
-  const [timelineImage, setTimelineImage] = useState(null)
+  const [existingTimelineImages, setExistingTimelineImages] = useState([])
+  const [newTimelineImages, setNewTimelineImages] = useState([])
+  const [selectedJourneyStep, setSelectedJourneyStep] = useState(null)
+
+  useEffect(() => {
+    setSelectedJourneyStep(null);
+  }, [selectedProject?.id]);
+
+  const loadTimelineStageData = (status) => {
+    setTimelineStatus(status);
+    const existingEntry = selectedProject?.timeline?.find(t => t.status === status);
+    if (existingEntry) {
+      setTimelineDate(existingEntry.date || new Date().toISOString().split('T')[0]);
+      setTimelineComment(existingEntry.comment || '');
+      setExistingTimelineImages(existingEntry.images || (existingEntry.image ? [existingEntry.image] : []));
+    } else {
+      setTimelineDate(new Date().toISOString().split('T')[0]);
+      setTimelineComment('');
+      setExistingTimelineImages([]);
+    }
+    setNewTimelineImages([]);
+  };
 
   const alert = (message, type = 'success') => {
     let alertType = type;
@@ -791,8 +812,6 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                         <span style={{ background: '#fef2f2', color: '#dc2626', fontSize: '10px', fontWeight: '700', padding: '3px 8px', borderRadius: '20px', border: '1px solid #fecaca' }}>⏸ On Hold</span>
                       )}
                     </div>
-
-                    {/* Horizontal step tracker */}
                     <div style={{ position: 'relative', paddingBottom: '6px', overflowX: 'auto' }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', minWidth: '320px', position: 'relative' }}>
                         {STEPS.map((step, idx) => {
@@ -800,8 +819,14 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                           const isCurrent = currentStatus === step;
                           const stepColor = isDone || isCurrent ? STEP_COLORS[step] : '#cbd5e1';
 
+                          // Active/Selected state
+                          const activeStep = selectedJourneyStep || currentStatus;
+                          const isSelected = activeStep === step;
+
                           return (
-                            <div key={step} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, position: 'relative', minWidth: '52px' }}>
+                            <div key={step} 
+                                 onClick={() => setSelectedJourneyStep(step)}
+                                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, position: 'relative', minWidth: '52px', cursor: 'pointer' }}>
                               {/* Connector line before */}
                               {idx > 0 && (
                                 <div style={{
@@ -822,14 +847,15 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                                 height: '30px',
                                 borderRadius: '50%',
                                 background: isDone ? stepColor : isCurrent ? stepColor : '#f1f5f9',
-                                border: `3px solid ${stepColor}`,
+                                border: `3px solid ${isSelected ? '#0f172a' : stepColor}`,
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 fontSize: isDone ? '14px' : '12px',
                                 position: 'relative',
                                 zIndex: 1,
-                                boxShadow: isCurrent ? `0 0 0 4px ${stepColor}30` : 'none',
+                                boxShadow: isSelected ? '0 0 0 4px rgba(15, 23, 42, 0.15)' : isCurrent ? `0 0 0 4px ${stepColor}30` : 'none',
+                                transform: isSelected ? 'scale(1.1)' : 'none',
                                 transition: 'all 0.3s',
                                 flexShrink: 0
                               }}>
@@ -842,8 +868,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                               <div style={{ marginTop: '6px', textAlign: 'center', maxWidth: '60px' }}>
                                 <span style={{
                                   fontSize: '9px',
-                                  fontWeight: isCurrent ? '800' : isDone ? '600' : '500',
-                                  color: isCurrent ? stepColor : isDone ? '#334155' : '#94a3b8',
+                                  fontWeight: isSelected ? '800' : isCurrent ? '700' : isDone ? '600' : '500',
+                                  color: isSelected ? '#0f172a' : isCurrent ? stepColor : isDone ? '#334155' : '#94a3b8',
                                   lineHeight: '1.2',
                                   display: 'block'
                                 }}>{STEP_LABELS[step] || step}</span>
@@ -860,41 +886,91 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                       </div>
                     </div>
 
-                    {/* Detailed log cards below tracker */}
-                    {timeline.length > 0 && (
-                      <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                        <h6 style={{ margin: '0 0 6px 0', fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Activity Log</h6>
-                        {[...timeline].reverse().map((t, idx) => {
-                          const sc = STATUS_COLORS[t.status] || STATUS_COLORS.Draft;
-                          return (
-                            <div key={idx} style={{
-                              background: sc.bg,
-                              border: `1px solid ${sc.border}`,
-                              borderRadius: '10px',
-                              padding: '10px 12px',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '6px'
-                            }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <span style={{ fontSize: '11px', fontWeight: '800', color: sc.color }}>
-                                  {STEP_ICONS[t.status] || '📌'} {t.status}
-                                </span>
-                                <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600' }}>{t.date}</span>
-                              </div>
-                              {t.comment && (
-                                <p style={{ margin: 0, fontSize: '11px', color: '#475569', lineHeight: '1.5' }}>{t.comment}</p>
-                              )}
-                              {t.image && (
-                                <div style={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${sc.border}` }}>
-                                  <img src={t.image} alt={t.status} style={{ width: '100%', height: '100px', objectFit: 'cover', display: 'block' }} />
+                    {/* Dynamic Step Detail Card */}
+                    {(() => {
+                      const activeStep = selectedJourneyStep || currentStatus;
+                      const activeLogs = logsByStep[activeStep] || [];
+                      const activeLog = activeLogs.length > 0 ? activeLogs[activeLogs.length - 1] : null;
+                      const sc = STATUS_COLORS[activeStep] || STATUS_COLORS.Draft;
+
+                      return (
+                        <div style={{
+                          marginTop: '16px',
+                          background: '#f8fafc',
+                          border: `1.5px solid ${sc.border || '#e2e8f0'}`,
+                          borderRadius: '12px',
+                          padding: '14px',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '12px', fontWeight: '800', color: sc.color, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {STEP_ICONS[activeStep] || '📌'} {STEP_LABELS[activeStep] || activeStep} Details
+                            </span>
+                            {activeLog && (
+                              <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600' }}>{activeLog.date}</span>
+                            )}
+                          </div>
+
+                          {activeStep === 'Approved' ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11px', color: '#475569' }}>
+                              {selectedProject.approver && (
+                                <div>
+                                  <span style={{ fontWeight: '700', color: '#64748b' }}>Approved By: </span>
+                                  <span>{selectedProject.approver}</span>
                                 </div>
                               )}
+                              {selectedProject.wo_comment && (
+                                <div>
+                                  <span style={{ fontWeight: '700', color: '#64748b' }}>Engineer Comments: </span>
+                                  <span>{selectedProject.wo_comment}</span>
+                                </div>
+                              )}
+                              {selectedProject.wo_id && (
+                                <div>
+                                  <span style={{ fontWeight: '700', color: '#64748b' }}>Work Order ID: </span>
+                                  <span>{selectedProject.wo_id}</span>
+                                </div>
+                              )}
+                              {!selectedProject.approver && !selectedProject.wo_comment && !selectedProject.wo_id && (
+                                <div style={{ color: '#94a3b8', fontStyle: 'italic', textAlign: 'center', padding: '10px' }}>No initial approval notes recorded.</div>
+                              )}
                             </div>
-                          );
-                        })}
-                      </div>
-                    )}
+                          ) : activeLog ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11px', color: '#475569' }}>
+                              {activeLog.comment && (
+                                <p style={{ margin: 0, fontSize: '12px', color: '#334155', lineHeight: '1.5', whiteSpace: 'pre-line' }}>{activeLog.comment}</p>
+                              )}
+                              
+                              {/* Multi-image / Single image render */}
+                              {(() => {
+                                const imgs = activeLog.images || (activeLog.image ? [activeLog.image] : []);
+                                if (imgs.length === 0) return null;
+                                return (
+                                  <div style={{ marginTop: '4px' }}>
+                                    <span style={{ display: 'block', fontSize: '9px', fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '6px', letterSpacing: '0.5px' }}>Photos ({imgs.length})</span>
+                                    <div style={{ display: 'grid', gridTemplateColumns: imgs.length === 1 ? '1fr' : 'repeat(2, 1fr)', gap: '8px' }}>
+                                      {imgs.map((imgUrl, i) => (
+                                        <div key={i} style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid #cbd5e1', cursor: 'zoom-in', position: 'relative', height: '100px' }}
+                                             onClick={() => window.open(imgUrl, '_blank')}>
+                                          <img src={imgUrl} alt={`milestone-${i}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          ) : (
+                            <div style={{ textAlign: 'center', padding: '16px 8px', color: '#94a3b8', fontSize: '11px', fontStyle: 'italic' }}>
+                              No progress details recorded for this stage yet.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
@@ -950,10 +1026,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                   {['Approved', 'Work Started', 'Ongoing', 'Hold', 'Near Completion'].includes(selectedProject.status) && (
                     <button onClick={() => {
                       const NEXT = { 'Approved': 'Work Started', 'Work Started': 'Ongoing', 'Ongoing': 'Near Completion', 'Near Completion': 'Completed', 'Hold': 'Ongoing' };
-                      setTimelineStatus(NEXT[selectedProject.status] || 'Work Started');
-                      setTimelineDate(new Date().toISOString().split('T')[0]);
-                      setTimelineComment('');
-                      setTimelineImage(null);
+                      const nextStatus = NEXT[selectedProject.status] || 'Work Started';
+                      loadTimelineStageData(nextStatus);
                       setShowStatusTimelinePopup(true);
                     }} style={{ width: '100%', padding: '11px', background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(37,99,235,0.3)', letterSpacing: '0.3px' }}>
                       📦 Update Progress
@@ -1067,7 +1141,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                   <h3 style={{ margin: 0, fontSize: '15px', color: '#fff', fontWeight: '800' }}>📦 Update Progress</h3>
                   <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>{selectedProject?.name}</p>
                 </div>
-                <button onClick={() => { setShowStatusTimelinePopup(false); setTimelineComment(''); setTimelineImage(null); }} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: '28px', height: '28px', color: '#fff', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                <button onClick={() => { setShowStatusTimelinePopup(false); setTimelineComment(''); setExistingTimelineImages([]); setNewTimelineImages([]); }} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: '28px', height: '28px', color: '#fff', cursor: 'pointer', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
               </div>
 
               <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -1097,14 +1171,14 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                   const selIdx = STEPS.indexOf(timelineStatus);
                   return (
                     <div style={{ background: '#f8fafc', borderRadius: '12px', padding: '14px 10px 10px', border: '1px solid #e2e8f0' }}>
-                      <p style={{ margin: '0 0 10px 0', fontSize: '10px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', textAlign: 'center', letterSpacing: '0.5px' }}>Select Next Stage</p>
+                      <p style={{ margin: '0 0 10px 0', fontSize: '10px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', textAlign: 'center', letterSpacing: '0.5px' }}>Select Stage</p>
                       <div style={{ display: 'flex', alignItems: 'flex-start' }}>
                         {STEPS.map((s, i) => {
                           const done = i < selIdx;
                           const active = i === selIdx;
                           const col = done || active ? STEP_COLORS[s] : '#cbd5e1';
                           return (
-                            <div key={s} onClick={() => setTimelineStatus(s)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', position: 'relative' }}>
+                            <div key={s} onClick={() => loadTimelineStageData(s)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', position: 'relative' }}>
                               {i > 0 && (
                                 <div style={{ position: 'absolute', top: '13px', right: '50%', left: '-50%', height: '3px', background: done ? STEP_COLORS[s] : '#e2e8f0', zIndex: 0 }} />
                               )}
@@ -1143,12 +1217,61 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                   />
                 </div>
 
-                {/* Image */}
+                {/* Milestone Photos (Multiselect) */}
                 <div>
-                  <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: '#64748b', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Milestone Photo</label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 12px', border: '1.5px dashed #cbd5e1', borderRadius: '8px', cursor: 'pointer', background: '#f8fafc', fontSize: '12px', color: '#64748b', fontWeight: '600' }}>
-                    📷 {timelineImage ? timelineImage.name : 'Click to upload image'}
-                    <input type="file" accept="image/*" onChange={(e) => setTimelineImage(e.target.files[0])} style={{ display: 'none' }} />
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: '#64748b', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Milestone Photos</label>
+                  
+                  {/* Grid of current images */}
+                  {((existingTimelineImages.length > 0) || (newTimelineImages.length > 0)) && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '10px', maxHeight: '130px', overflowY: 'auto', padding: '2px' }}>
+                      {/* Existing Images */}
+                      {existingTimelineImages.map((imgUrl, i) => (
+                        <div key={`existing-${i}`} style={{ position: 'relative', height: '60px', borderRadius: '6px', overflow: 'hidden', border: '1px solid #cbd5e1' }}>
+                          <img src={imgUrl} alt="existing-milestone" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          <button 
+                            type="button"
+                            onClick={() => setExistingTimelineImages(prev => prev.filter((_, idx) => idx !== i))}
+                            style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(239, 68, 68, 0.85)', color: '#fff', border: 'none', borderRadius: '50%', width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '10px', padding: 0 }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      
+                      {/* New local image previews */}
+                      {newTimelineImages.map((file, i) => {
+                        const previewUrl = URL.createObjectURL(file);
+                        return (
+                          <div key={`new-${i}`} style={{ position: 'relative', height: '60px', borderRadius: '6px', overflow: 'hidden', border: '1px solid #2563eb' }}>
+                            <img src={previewUrl} alt="new-milestone" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <button 
+                              type="button"
+                              onClick={() => setNewTimelineImages(prev => prev.filter((_, idx) => idx !== i))}
+                              style={{ position: 'absolute', top: '2px', right: '2px', background: 'rgba(239, 68, 68, 0.85)', color: '#fff', border: 'none', borderRadius: '50%', width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '10px', padding: 0 }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Add Photos Input Button */}
+                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px 12px', border: '1.5px dashed #2563eb', borderRadius: '8px', cursor: 'pointer', background: '#f0f4ff', fontSize: '12px', color: '#2563eb', fontWeight: '700', transition: 'all 0.2s' }}>
+                    📷 Add Photos (Multiselect)
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      multiple 
+                      onChange={(e) => {
+                        if (e.target.files) {
+                          const filesArray = Array.from(e.target.files);
+                          setNewTimelineImages(prev => [...prev, ...filesArray]);
+                        }
+                      }} 
+                      style={{ display: 'none' }} 
+                    />
                   </label>
                 </div>
 
@@ -1162,7 +1285,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                           timelineStatus,
                           timelineDate,
                           timelineComment,
-                          timelineImage
+                          newTimelineImages,
+                          existingTimelineImages
                         );
                         if (res && res.success) {
                           alert(`Project moved to '${res.status}' successfully!`);
@@ -1177,14 +1301,15 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                       }
                       setShowStatusTimelinePopup(false);
                       setTimelineComment('');
-                      setTimelineImage(null);
+                      setExistingTimelineImages([]);
+                      setNewTimelineImages([]);
                     }}
                     style={{ flex: 1, padding: '11px', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', fontSize: '13px', boxShadow: '0 4px 12px rgba(37,99,235,0.3)' }}
                   >
                     ✅ Save
                   </button>
                   <button
-                    onClick={() => { setShowStatusTimelinePopup(false); setTimelineComment(''); setTimelineImage(null); }}
+                    onClick={() => { setShowStatusTimelinePopup(false); setTimelineComment(''); setExistingTimelineImages([]); setNewTimelineImages([]); }}
                     style={{ flex: 1, padding: '11px', background: '#f1f5f9', color: '#475569', border: '1.5px solid #e2e8f0', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}
                   >
                     Cancel

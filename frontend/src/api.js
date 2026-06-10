@@ -137,14 +137,22 @@ export async function getPendingWorkOrdersCount() {
   return call('get_pending_work_orders_count')
 }
 
-export async function addTimelineEntry(projectId, status, date, comment, file) {
+export async function addTimelineEntry(projectId, status, date, comment, files = [], existingImages = []) {
   const formData = new FormData()
   formData.append('project_id', projectId)
   formData.append('status', status)
   formData.append('date', date)
   formData.append('comment', comment || '')
-  if (file) {
-    formData.append('file', file)
+  formData.append('existing_images', JSON.stringify(existingImages))
+  
+  if (Array.isArray(files)) {
+    files.forEach(file => {
+      if (file) {
+        formData.append('file', file)
+      }
+    })
+  } else if (files) {
+    formData.append('file', files)
   }
 
   const res = await fetch(`${API}.add_timeline_entry`, {
