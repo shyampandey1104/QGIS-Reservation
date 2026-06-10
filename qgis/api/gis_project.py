@@ -350,6 +350,13 @@ def get_projects(status=None, limit=None, omit_geometry=False):
     user_roles = frappe.get_roles(user)
     is_admin = "System Manager" in user_roles or user == "Administrator"
 
+    # These statuses are always visible to all logged-in users (post-approval journey)
+    ALWAYS_VISIBLE_STATUSES = [
+        "Approved", "Submitted",
+        "Work Started", "Ongoing", "On Hold", "Hold",
+        "Near Completion", "Completed"
+    ]
+
     filtered_projects = []
     for p in projects:
         # Admins see all
@@ -360,8 +367,8 @@ def get_projects(status=None, limit=None, omit_geometry=False):
         if p.get("owner") == user:
             filtered_projects.append(p)
             continue
-        # Approved/Submitted live layers are visible to everyone
-        if p.get("status") in ["Approved", "Submitted"]:
+        # Approved + all post-approval statuses are always visible to everyone (never disappear)
+        if p.get("status") in ALWAYS_VISIBLE_STATUSES:
             filtered_projects.append(p)
             continue
         # Workflow projects only visible to their assigned approver role
