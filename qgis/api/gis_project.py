@@ -964,26 +964,46 @@ def update_custom_attributes(project_id, custom_attributes):
         
     if isinstance(custom_attributes, dict):
         meta = frappe.get_meta("GIS Project")
-        needs_export = False
+        needs_clear_cache = False
         
-        doctype_doc = frappe.get_doc("DocType", "GIS Project")
-        for label, value in custom_attributes.items():
-            fieldname = frappe.scrub(label)
-            if not meta.has_field(fieldname):
-                doctype_doc.append("fields", {
-                    "fieldname": fieldname,
-                    "label": label,
-                    "fieldtype": "Data",
-                    "insert_after": "remarks"
-                })
-                needs_export = True
-                
-        if needs_export:
-            doctype_doc.save(ignore_permissions=True)
-            export_to_files(record_list=[["DocType", "GIS Project"]])
-            frappe.db.updatedb("GIS Project")
-            frappe.db.commit()
-            frappe.clear_cache(doctype="GIS Project")
+        # Check if developer mode is enabled
+        developer_mode = frappe.conf.get("developer_mode", 0)
+        
+        if developer_mode:
+            doctype_doc = frappe.get_doc("DocType", "GIS Project")
+            for label, value in custom_attributes.items():
+                fieldname = frappe.scrub(label)
+                if not meta.has_field(fieldname):
+                    doctype_doc.append("fields", {
+                        "fieldname": fieldname,
+                        "label": label,
+                        "fieldtype": "Data",
+                        "insert_after": "remarks"
+                    })
+                    needs_clear_cache = True
+            if needs_clear_cache:
+                doctype_doc.save(ignore_permissions=True)
+                export_to_files(record_list=[["DocType", "GIS Project"]])
+                frappe.db.updatedb("GIS Project")
+                frappe.db.commit()
+                frappe.clear_cache(doctype="GIS Project")
+        else:
+            # In production, use Custom Field to avoid CannotCreateStandardDoctypeError
+            for label, value in custom_attributes.items():
+                fieldname = frappe.scrub(label)
+                if not meta.has_field(fieldname):
+                    if not frappe.db.exists("Custom Field", {"dt": "GIS Project", "fieldname": fieldname}):
+                        custom_field = frappe.new_doc("Custom Field")
+                        custom_field.dt = "GIS Project"
+                        custom_field.fieldname = fieldname
+                        custom_field.label = label
+                        custom_field.fieldtype = "Data"
+                        custom_field.insert_after = "remarks"
+                        custom_field.insert(ignore_permissions=True)
+                        needs_clear_cache = True
+            if needs_clear_cache:
+                frappe.clear_cache(doctype="GIS Project")
+                frappe.db.commit()
             
         original_doc = frappe.get_doc("GIS Project", project_id)
         
