@@ -16,6 +16,32 @@ ROLE_TRANSITIONS = {
     "Muncipal Commissioner":    {"can_create": False, "can_submit": False, "allowed_from": ["Submitted", "Pending for Request"], "allowed_to": ["Approved", "Rejected", "Correction"]},
 }
 
+# Predefined colors for project types (used as default colors for manual uploads)
+DEFAULT_COLORS = {
+    "Chambers_Manhole": "#e74c3c",
+    "Drainage": "#3498db",
+    "Pipeline_Network": "#2ecc71",
+    "Railway_Underpass": "#f39c12",
+    "Raw_Water_Station": "#9b59b6",
+    "Road": "#2c3e50",
+    "Road_Bridge": "#1abc9c",
+    "Road_Flyover": "#16a085",
+    "Road_Underpass": "#d35400",
+    "Sewage_Treatment_Plant": "#7f8c8d",
+    "Sewer_Pipeline_Network": "#c0392b",
+    "Sewerage_Collection_Point": "#2980b9",
+    "Storage_Tank": "#27ae60",
+    "Treatment_Plant": "#f1c40f",
+    "Water_Source": "#8e44ad",
+    "VVCM-ALL-ROAD": "#3b82f6",
+    "VVCM_BOUNDARY": "#ef4444",
+    "VVCM_OFFICE_BUILDING": "#1abc9c",
+    "VVCM_VILLAGE BOUNDARY": "#f97316",
+    "Prabhag_Ward_Boundary": "#9b59b6",
+    "City_Boundary": "#c0392b",
+    "DMA_Location": "#16a085"
+}
+
 @frappe.whitelist()
 def setup_workflow():
     # 0. Create Roles if they don't exist
@@ -209,6 +235,15 @@ def _serialize(p, geometry, wo=None, fetch_wo_if_none=True):
             res["wo_id"] = wo.get("name")
 
     
+    # Copy all other columns from database record if they exist in p
+    p_dict = p
+    if hasattr(p, "as_dict") and callable(p.as_dict):
+        p_dict = p.as_dict()
+    if isinstance(p_dict, dict):
+        for k, v in p_dict.items():
+            if k not in res and k not in ["geometry", "_user_tags", "_comments", "_assign", "_liked_by"]:
+                res[k] = v
+
     # Merge custom attributes
     custom_attrs_str = p.get("custom_attributes")
     if custom_attrs_str:
@@ -823,15 +858,52 @@ def upload_manual_data(ward="Manual Upload", project_type="Other Infrastructure"
                         if final_type == "OGRGeoJSON" and suffix == ".zip":
                             final_type = os.path.splitext(os.path.basename(fpath))[0]
 
+                        # Auto-register in GIS Category if it doesn't exist
+                        if frappe.db.exists("DocType", "GIS Category"):
+                            if not frappe.db.exists("GIS Category", final_type):
+                                # Determine defaults based on name
+                                is_fill = 0 if "boundary" in final_type.lower() or "road" in final_type.lower() or "drain" in final_type.lower() or "pipe" in final_type.lower() else 1
+                                weight_val = 4 if "boundary" in final_type.lower() else 1.5 if "village" in final_type.lower() else 2 if "road" in final_type.lower() else 3
+                                cat_color = DEFAULT_COLORS.get(final_type) or DEFAULT_COLORS.get(layer) or "#1a73e8"
+                                try:
+                                    cat_doc = frappe.get_doc({
+                                        "doctype": "GIS Category",
+                                        "category_name": final_type,
+                                        "color": cat_color,
+                                        "fill": is_fill,
+                                        "weight": weight_val
+                                    })
+                                    cat_doc.insert(ignore_permissions=True)
+                                    frappe.db.commit()
+                                except Exception as e:
+                                    frappe.log_error(f"Failed to auto-create category {final_type}: {str(e)}")
+
+                        # Retrieve color from GIS Category if possible
+                        project_color = None
+                        if frappe.db.exists("DocType", "GIS Category"):
+                            project_color = frappe.db.get_value("GIS Category", final_type, "color")
+                        if not project_color:
+                            project_color = DEFAULT_COLORS.get(final_type) or DEFAULT_COLORS.get(layer) or "#2563eb"
+
+                        # Build custom_attributes from all props
+                        custom_attrs = {}
+                        for prop_k, prop_v in props.items():
+                            custom_attrs[prop_k] = prop_v
+
                         doc = frappe.get_doc({
                             "doctype": "GIS Project",
                             "project_name": p_name,
                             "ward": ward,
                             "project_type": final_type, 
                             "status": "Draft",
+                            "color": project_color,
                             "description": f"LAYER_TYPE:{layer} | Imported from {uploaded_file.filename}",
                             "submitted_by_role": role,
                             "geometry": json.dumps(geom),
+                            "custom_attributes": json.dumps(custom_attrs),
+                            "area_name": props.get("area_name") or props.get("Area Name"),
+                            "area_size": props.get("area_size") or props.get("Area Size"),
+                            "yearly_rent": props.get("yearly_rent") or props.get("Yearly Rent"),
                             "remarks": props.get("Remark") or props.get("remarks") or f"Source Layer: {layer}",
                             "road_name": props.get("road_name") or props.get("name") or props.get("fly_name") or props.get("bridg_name") or props.get("unp_name") or props.get("Rail_Route"),
                             "road_no": props.get("road_no") or props.get("road_num"),
@@ -963,6 +1035,14 @@ def update_custom_attributes(project_id, custom_attributes):
         custom_attributes = json.loads(custom_attributes)
         
     if isinstance(custom_attributes, dict):
+        # Filter out standard DocType fields and internal properties to prevent validation errors
+        ignored_keys = {
+            "name", "owner", "creation", "modified", "modified_by", "docstatus", "idx", 
+            "amended_from", "geometry", "_user_tags", "_comments", "_assign", "_liked_by",
+            "timeline", "stages", "color", "status", "submitted_by_role", "wo_id", "wo_comment",
+            "wo_attachment", "approver", "created_at", "id"
+        }
+        custom_attributes = {k: v for k, v in custom_attributes.items() if k not in ignored_keys and k.lower() not in ignored_keys}
         meta = frappe.get_meta("GIS Project")
         needs_clear_cache = False
         
@@ -972,12 +1052,14 @@ def update_custom_attributes(project_id, custom_attributes):
         if developer_mode:
             doctype_doc = frappe.get_doc("DocType", "GIS Project")
             for label, value in custom_attributes.items():
+                if label == "section_mappings":
+                    continue
                 fieldname = frappe.scrub(label)
                 if not meta.has_field(fieldname):
                     doctype_doc.append("fields", {
                         "fieldname": fieldname,
                         "label": label,
-                        "fieldtype": "Data",
+                        "fieldtype": "Long Text" if fieldname in ["tenant_attachments", "pdf_attachment"] else "Data",
                         "insert_after": "remarks"
                     })
                     needs_clear_cache = True
@@ -990,6 +1072,8 @@ def update_custom_attributes(project_id, custom_attributes):
         else:
             # In production, use Custom Field to avoid CannotCreateStandardDoctypeError
             for label, value in custom_attributes.items():
+                if label == "section_mappings":
+                    continue
                 fieldname = frappe.scrub(label)
                 if not meta.has_field(fieldname):
                     if not frappe.db.exists("Custom Field", {"dt": "GIS Project", "fieldname": fieldname}):
@@ -997,7 +1081,7 @@ def update_custom_attributes(project_id, custom_attributes):
                         custom_field.dt = "GIS Project"
                         custom_field.fieldname = fieldname
                         custom_field.label = label
-                        custom_field.fieldtype = "Data"
+                        custom_field.fieldtype = "Long Text" if fieldname in ["tenant_attachments", "pdf_attachment"] else "Data"
                         custom_field.insert_after = "remarks"
                         custom_field.insert(ignore_permissions=True)
                         needs_clear_cache = True
@@ -1007,16 +1091,31 @@ def update_custom_attributes(project_id, custom_attributes):
             
         original_doc = frappe.get_doc("GIS Project", project_id)
         
-        # If in Correction status, update the same project in-place so they can resubmit it
-        if original_doc.status == "Correction":
+        # Load existing custom attributes to merge new ones and preserve attachments
+        existing_custom_attrs = {}
+        if original_doc.custom_attributes:
+            try:
+                existing_custom_attrs = json.loads(original_doc.custom_attributes)
+            except Exception:
+                pass
+                
+        # Merge new attributes into existing ones
+        for label, value in custom_attributes.items():
+            existing_custom_attrs[label] = value
+
+        # If in Draft or Correction status, update the same project in-place so they can resubmit it
+        if original_doc.status in ["Draft", "Correction"]:
             if original_doc.docstatus != 0:
                 original_doc.db_set("docstatus", 0)
                 original_doc.docstatus = 0
                 frappe.db.commit()
             for label, value in custom_attributes.items():
+                if label == "section_mappings":
+                    continue
                 fieldname = frappe.scrub(label)
-                original_doc.set(fieldname, value)
-            original_doc.custom_attributes = json.dumps(custom_attributes)
+                val_to_set = json.dumps(value) if isinstance(value, (list, dict)) else value
+                original_doc.set(fieldname, val_to_set)
+            original_doc.custom_attributes = json.dumps(existing_custom_attrs)
             original_doc.save(ignore_permissions=True)
             frappe.cache().delete_keys("gis_projects_cache_")
             frappe.db.commit()
@@ -1025,18 +1124,23 @@ def update_custom_attributes(project_id, custom_attributes):
         # Create a new record (duplicate) as requested
         new_doc = frappe.copy_doc(original_doc)
         new_doc.status = "Draft"
+        new_doc.docstatus = 0
         
         for label, value in custom_attributes.items():
+            if label == "section_mappings":
+                continue
             fieldname = frappe.scrub(label)
-            new_doc.set(fieldname, value)
+            val_to_set = json.dumps(value) if isinstance(value, (list, dict)) else value
+            new_doc.set(fieldname, val_to_set)
             
-        new_doc.custom_attributes = json.dumps(custom_attributes)
+        new_doc.custom_attributes = json.dumps(existing_custom_attrs)
         new_doc.insert(ignore_permissions=True, ignore_mandatory=True)
         frappe.cache().delete_keys("gis_projects_cache_")
         frappe.db.commit()
         
         return {"id": new_doc.name, "updated": True}
     return {"id": project_id, "updated": False}
+
 
 @frappe.whitelist()
 def fix_options():
@@ -1243,6 +1347,317 @@ def add_timeline_entry():
     frappe.db.commit()
     
     return {"success": True, "id": project_id, "status": status, "color": color, "timeline": timeline_list}
+
+
+@frappe.whitelist(allow_guest=True)
+def get_categories():
+    if not frappe.db.exists("DocType", "GIS Category"):
+        return [
+            {
+                "name": k,
+                "category_name": k,
+                "color": v,
+                "fill": 0 if "boundary" in k.lower() or "road" in k.lower() or "drainage" in k.lower() or "pipeline" in k.lower() else 1,
+                "weight": 4 if "boundary" in k.lower() else 2 if "village" in k.lower() or "manhole" in k.lower() else 3
+            }
+            for k, v in DEFAULT_COLORS.items()
+        ]
+    return frappe.get_all("GIS Category", fields=["name", "category_name", "color", "fill", "weight"], order_by="category_name asc")
+
+
+@frappe.whitelist()
+def create_category(category_name, color="#1a73e8", fill=1, weight=3):
+    if not category_name:
+        frappe.throw("Category name is required")
+        
+    fill_val = 1 if int(fill) else 0
+    
+    if not frappe.db.exists("GIS Category", category_name):
+        doc = frappe.get_doc({
+            "doctype": "GIS Category",
+            "category_name": category_name,
+            "color": color,
+            "fill": fill_val,
+            "weight": int(weight)
+        })
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+        frappe.cache().delete_keys("gis_projects_cache_")
+        return {"success": True, "category": doc.name}
+    return {"success": False, "error": "Category already exists"}
+
+
+@frappe.whitelist()
+def upload_project_pdf():
+    # We can get files using:
+    uploaded_files = frappe.request.files.getlist("files") or frappe.request.files.getlist("file")
+    if not uploaded_files:
+        if frappe.request.files.get("file"):
+            uploaded_files = [frappe.request.files.get("file")]
+        elif frappe.request.files.get("files"):
+            uploaded_files = [frappe.request.files.get("files")]
+            
+    if not uploaded_files:
+        frappe.throw("No files uploaded")
+        
+    project_id = frappe.form_dict.get("project_id")
+    if not project_id:
+        frappe.throw("Project ID is required")
+        
+    from frappe.utils.file_manager import save_file
+    
+    saved_attachments = []
+    
+    for uploaded_file in uploaded_files:
+        file_doc = save_file(
+            fname=uploaded_file.filename,
+            content=uploaded_file.read(),
+            dt="GIS Project",
+            dn=project_id,
+            is_private=0
+        )
+        saved_attachments.append({
+            "name": uploaded_file.filename,
+            "url": file_doc.file_url
+        })
+        
+    doc = frappe.get_doc("GIS Project", project_id)
+    
+    custom_attrs = {}
+    if doc.custom_attributes:
+        try:
+            custom_attrs = json.loads(doc.custom_attributes)
+        except Exception:
+            pass
+            
+    # Load existing attachments
+    existing = custom_attrs.get("pdf_attachment")
+    attachments_list = []
+    
+    if existing:
+        if isinstance(existing, list):
+            attachments_list = existing
+        elif isinstance(existing, str):
+            try:
+                parsed = json.loads(existing)
+                if isinstance(parsed, list):
+                    attachments_list = parsed
+                else:
+                    attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+            except:
+                attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+                
+    # Add newly saved attachments
+    attachments_list.extend(saved_attachments)
+    
+    custom_attrs["pdf_attachment"] = attachments_list
+    doc.custom_attributes = json.dumps(custom_attrs)
+    
+    meta = frappe.get_meta("GIS Project")
+    if meta.has_field("pdf_attachment") or frappe.db.exists("Custom Field", {"dt": "GIS Project", "fieldname": "pdf_attachment"}):
+        doc.set("pdf_attachment", json.dumps(attachments_list))
+        
+    if doc.docstatus == 1:
+        doc.db_set("custom_attributes", doc.custom_attributes)
+        if meta.has_field("pdf_attachment"):
+            doc.db_set("pdf_attachment", json.dumps(attachments_list))
+    else:
+        doc.save(ignore_permissions=True)
+        
+    frappe.cache().delete_keys("gis_projects_cache_")
+    frappe.db.commit()
+    
+    return {"attachments": attachments_list}
+
+
+@frappe.whitelist()
+def remove_project_attachment(project_id, file_url):
+    if not project_id:
+        frappe.throw("Project ID is required")
+    if not file_url:
+        frappe.throw("File URL is required")
+        
+    doc = frappe.get_doc("GIS Project", project_id)
+    
+    custom_attrs = {}
+    if doc.custom_attributes:
+        try:
+            custom_attrs = json.loads(doc.custom_attributes)
+        except Exception:
+            pass
+            
+    existing = custom_attrs.get("pdf_attachment")
+    attachments_list = []
+    
+    if existing:
+        if isinstance(existing, list):
+            attachments_list = existing
+        elif isinstance(existing, str):
+            try:
+                parsed = json.loads(existing)
+                if isinstance(parsed, list):
+                    attachments_list = parsed
+                else:
+                    attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+            except:
+                attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+                
+    # Filter out the matching file_url
+    new_list = [att for att in attachments_list if att.get("url") != file_url]
+    
+    if not new_list:
+        if "pdf_attachment" in custom_attrs:
+            del custom_attrs["pdf_attachment"]
+    else:
+        custom_attrs["pdf_attachment"] = new_list
+        
+    doc.custom_attributes = json.dumps(custom_attrs)
+    
+    meta = frappe.get_meta("GIS Project")
+    if meta.has_field("pdf_attachment") or frappe.db.exists("Custom Field", {"dt": "GIS Project", "fieldname": "pdf_attachment"}):
+        doc.set("pdf_attachment", json.dumps(new_list) if new_list else None)
+        
+    if doc.docstatus == 1:
+        doc.db_set("custom_attributes", doc.custom_attributes)
+        if meta.has_field("pdf_attachment"):
+            doc.db_set("pdf_attachment", json.dumps(new_list) if new_list else None)
+    else:
+        doc.save(ignore_permissions=True)
+        
+    frappe.cache().delete_keys("gis_projects_cache_")
+    frappe.db.commit()
+    
+    return {"success": True}
+
+
+@frappe.whitelist()
+def upload_tenant_attachments():
+    uploaded_files = frappe.request.files.getlist("files") or frappe.request.files.getlist("file")
+    if not uploaded_files:
+        if frappe.request.files.get("file"):
+            uploaded_files = [frappe.request.files.get("file")]
+        elif frappe.request.files.get("files"):
+            uploaded_files = [frappe.request.files.get("files")]
+            
+    if not uploaded_files:
+        frappe.throw("No files uploaded")
+        
+    project_id = frappe.form_dict.get("project_id")
+    if not project_id:
+        frappe.throw("Project ID is required")
+        
+    from frappe.utils.file_manager import save_file
+    
+    saved_attachments = []
+    for uploaded_file in uploaded_files:
+        file_doc = save_file(
+            fname=uploaded_file.filename,
+            content=uploaded_file.read(),
+            dt="GIS Project",
+            dn=project_id,
+            is_private=0
+        )
+        saved_attachments.append({
+            "name": uploaded_file.filename,
+            "url": file_doc.file_url
+        })
+        
+    doc = frappe.get_doc("GIS Project", project_id)
+    custom_attrs = {}
+    if doc.custom_attributes:
+        try:
+            custom_attrs = json.loads(doc.custom_attributes)
+        except Exception:
+            pass
+            
+    existing = custom_attrs.get("tenant_attachments")
+    attachments_list = []
+    if existing:
+        if isinstance(existing, list):
+            attachments_list = existing
+        elif isinstance(existing, str):
+            try:
+                parsed = json.loads(existing)
+                if isinstance(parsed, list):
+                    attachments_list = parsed
+                else:
+                    attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+            except:
+                attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+                
+    attachments_list.extend(saved_attachments)
+    custom_attrs["tenant_attachments"] = attachments_list
+    doc.custom_attributes = json.dumps(custom_attrs)
+    
+    meta = frappe.get_meta("GIS Project")
+    if meta.has_field("tenant_attachments") or frappe.db.exists("Custom Field", {"dt": "GIS Project", "fieldname": "tenant_attachments"}):
+        doc.set("tenant_attachments", json.dumps(attachments_list))
+        
+    if doc.docstatus == 1:
+        doc.db_set("custom_attributes", doc.custom_attributes)
+        if meta.has_field("tenant_attachments"):
+            doc.db_set("tenant_attachments", json.dumps(attachments_list))
+    else:
+        doc.save(ignore_permissions=True)
+        
+    frappe.cache().delete_keys("gis_projects_cache_")
+    frappe.db.commit()
+    return {"attachments": attachments_list}
+
+
+@frappe.whitelist()
+def remove_tenant_attachment(project_id, file_url):
+    if not project_id:
+        frappe.throw("Project ID is required")
+    if not file_url:
+        frappe.throw("File URL is required")
+        
+    doc = frappe.get_doc("GIS Project", project_id)
+    custom_attrs = {}
+    if doc.custom_attributes:
+        try:
+            custom_attrs = json.loads(doc.custom_attributes)
+        except Exception:
+            pass
+            
+    existing = custom_attrs.get("tenant_attachments")
+    attachments_list = []
+    if existing:
+        if isinstance(existing, list):
+            attachments_list = existing
+        elif isinstance(existing, str):
+            try:
+                parsed = json.loads(existing)
+                if isinstance(parsed, list):
+                    attachments_list = parsed
+                else:
+                    attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+            except:
+                attachments_list = [{"name": existing.split('/')[-1], "url": existing}]
+                
+    new_list = [att for att in attachments_list if att.get("url") != file_url]
+    if not new_list:
+        if "tenant_attachments" in custom_attrs:
+            del custom_attrs["tenant_attachments"]
+    else:
+        custom_attrs["tenant_attachments"] = new_list
+        
+    doc.custom_attributes = json.dumps(custom_attrs)
+    meta = frappe.get_meta("GIS Project")
+    if meta.has_field("tenant_attachments") or frappe.db.exists("Custom Field", {"dt": "GIS Project", "fieldname": "tenant_attachments"}):
+        doc.set("tenant_attachments", json.dumps(new_list) if new_list else None)
+        
+    if doc.docstatus == 1:
+        doc.db_set("custom_attributes", doc.custom_attributes)
+        if meta.has_field("tenant_attachments"):
+            doc.db_set("tenant_attachments", json.dumps(new_list) if new_list else None)
+    else:
+        doc.save(ignore_permissions=True)
+        
+    frappe.cache().delete_keys("gis_projects_cache_")
+    frappe.db.commit()
+    return {"success": True}
+
 
 
 

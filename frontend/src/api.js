@@ -167,3 +167,16 @@ export async function addTimelineEntry(projectId, status, date, comment, files =
   return data.message
 }
 
+export function fetchCategories() {
+  return call('get_categories')
+}
+
+export function createCategory(data) {
+  return call('create_category', {
+    category_name: data.category_name,
+    color: data.color || '#1a73e8',
+    fill: data.fill ? 1 : 0,
+    weight: data.weight || 3
+  })
+}
+

@@ -3,7 +3,9 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import 'leaflet-draw'
-import { fetchProjects, createProject, deleteProject, manualUpload, updateCustomAttributes, submitWorkOrder, addTimelineEntry } from '../api'
+import { fetchProjects, createProject, deleteProject, manualUpload, updateCustomAttributes, submitWorkOrder, addTimelineEntry, fetchCategories, createCategory } from '../api'
+
+const API = '/api/method/qgis.api.gis_project'
 
 const STATUS_COLORS = {
   Draft:                 { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1' },
@@ -16,7 +18,7 @@ const STATUS_COLORS = {
   'On Hold':             { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
   Hold:                  { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green (legacy key)
   'Near Completion':     { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
-  Completed:             { bg: '#dcfce7', color: '#14532d', border: '#86efac' }, // Dark Green
+  Completed:             { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' }, // Green
 }
 
 const LAYER_META = {
@@ -34,7 +36,16 @@ const LAYER_META = {
   Sewerage_Collection_Point: { color: '#2980b9' },
   Storage_Tank: { color: '#27ae60' },
   Treatment_Plant: { color: '#f1c40f' },
-  Water_Source: { color: '#8e44ad' }
+  Water_Source: { color: '#8e44ad' },
+  
+  // Custom uploaded layers
+  'VVCM-ALL-ROAD': { color: '#3b82f6', fill: false, weight: 2 },
+  'VVCM_BOUNDARY': { color: '#ef4444', fill: false, weight: 4 },
+  'VVCM_OFFICE_BUILDING': { color: '#1abc9c', fill: true, weight: 2 },
+  'VVCM_VILLAGE BOUNDARY': { color: '#f97316', fill: false, weight: 1.5 },
+  'Prabhag_Ward_Boundary': { color: '#9b59b6', fill: false, weight: 2 },
+  'City_Boundary': { color: '#c0392b', fill: false, weight: 5 },
+  'DMA_Location': { color: '#16a085', fill: true, weight: 2 }
 }
 
 const cleanCoords = (coords) => {
@@ -46,7 +57,7 @@ const cleanCoords = (coords) => {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-const STANDARD_KEYS = ['id', 'name', 'type', 'ward', 'status', 'road_name', 'road_no', 'road_type', 'pave_type', 'landmark', 'authority', 'traffic', 'width', 'shape_length', 'unp_name', 'unp_type', 'dma_no', 'ward_no', 'junc_name', 'facility', 'rail_route', 'bridg_name', 'bridg_type', 'fly_name', 'description', 'remarks', 'coordinates', 'color', 'geom_type', 'created_at', 'modified', 'owner', 'docstatus', 'approver', 'custom_attributes', 'timeline', 'stages'];
+const STANDARD_KEYS = ['id', 'name', 'type', 'ward', 'status', 'road_name', 'road_no', 'road_type', 'pave_type', 'landmark', 'authority', 'traffic', 'width', 'shape_length', 'unp_name', 'unp_type', 'dma_no', 'ward_no', 'junc_name', 'facility', 'rail_route', 'bridg_name', 'bridg_type', 'fly_name', 'description', 'remarks', 'coordinates', 'color', 'geom_type', 'created_at', 'modified', 'owner', 'docstatus', 'approver', 'custom_attributes', 'timeline', 'stages', 'pdf_attachment', 'area_name', 'area_size', 'yearly_rent', 'plot_area', 'Plot Area', 'constructed_area', 'Constructed Area', 'Tenant Name', 'tenant_name', 'Profession', 'profession', 'Purpose of Use', 'purpose_of_use', 'Contact Information', 'contact_information', 'Rental Period', 'rental_period', 'Aadhar Number', 'aadhar_number', 'aadhar_no', 'GST Number', 'gst_number', 'gst_no', 'PAN Card Number', 'pan_card_number', 'pancard_no', 'Rent Amount', 'rent_amount', 'Renewal Date', 'renewal_date', 'Tenant Attachments', 'tenant_attachments', 'creation', 'modified_by', 'idx', 'amended_from'];
 
 export default function GISMap({ userInfo, requestTrigger, liveFilterActive, setLiveFilterActive }) {
   const mapRef = useRef(null)
@@ -56,6 +67,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
   const drawnLayersRef = useRef(null)
   const drawControlRef = useRef(null)
   const categoryGroupsRef = useRef({}) // Store groups by type: { 'Road': L.FeatureGroup, ... }
+  const mapClickHandledRef = useRef(false)
 
   const [projects, setProjects] = useState(() => {
     const cached = localStorage.getItem('gis_projects_light');
@@ -96,6 +108,136 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
   const [existingTimelineImages, setExistingTimelineImages] = useState([])
   const [newTimelineImages, setNewTimelineImages] = useState([])
   const [selectedJourneyStep, setSelectedJourneyStep] = useState(null)
+  const [previewFile, setPreviewFile] = useState(null)
+
+  // Generate Demand & Tenant Registration states
+  const [showGenerateDemandPopup, setShowGenerateDemandPopup] = useState(false)
+  const [demandAreaName, setDemandAreaName] = useState('')
+  const [demandAreaSize, setDemandAreaSize] = useState('')
+  const [demandYearlyRent, setDemandYearlyRent] = useState('')
+
+  const [showTenantRegistrationPopup, setShowTenantRegistrationPopup] = useState(false)
+  const [tenantName, setTenantName] = useState('')
+  const [tenantProfession, setTenantProfession] = useState('')
+  const [tenantPurposeOfUse, setTenantPurposeOfUse] = useState('')
+  const [tenantContactInfo, setTenantContactInfo] = useState('')
+  const [tenantRentalPeriod, setTenantRentalPeriod] = useState('')
+  const [tenantAadharNo, setTenantAadharNo] = useState('')
+  const [tenantGstNo, setTenantGstNo] = useState('')
+  const [tenantPanCardNo, setTenantPanCardNo] = useState('')
+  const [tenantRentAmount, setTenantRentAmount] = useState('')
+  const [tenantRenewalDate, setTenantRenewalDate] = useState('')
+  const [tenantAttachments, setTenantAttachments] = useState([])
+  const [isUploadingTenantFile, setIsUploadingTenantFile] = useState(false)
+
+  const getGeoLocationDisplay = (project) => {
+    if (!project || !project.coordinates || project.coordinates.length === 0) return 'N/A';
+    try {
+      const findFirstCoordsPair = (arr) => {
+        if (!Array.isArray(arr) || arr.length === 0) return null;
+        if (typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+          return arr;
+        }
+        for (let i = 0; i < arr.length; i++) {
+          const res = findFirstCoordsPair(arr[i]);
+          if (res) return res;
+        }
+        return null;
+      };
+      
+      const firstPair = findFirstCoordsPair(project.coordinates);
+      if (firstPair && firstPair.length >= 2) {
+        const lat = parseFloat(firstPair[0]).toFixed(6);
+        const lng = parseFloat(firstPair[1]).toFixed(6);
+        return `[${lat}, ${lng}]`;
+      }
+    } catch (e) {
+      console.error("Error formatting geo location:", e);
+    }
+    return 'N/A';
+  };
+
+  const getGroupedAttributes = () => {
+    if (!selectedProject) return [];
+    
+    const groups = [
+      {
+        title: "Property Details",
+        items: [
+          { l: 'Project Name', v: selectedProject.project_name || selectedProject.name, k: 'project_name' },
+          { l: 'Type', v: selectedProject.type, k: 'type' },
+          { l: 'Status', v: selectedProject.status, k: 'status', ro: true },
+          { l: 'Submitted By Role', v: selectedProject.submitted_by_role || selectedProject.submitted_by_role, k: 'submitted_by_role', ro: true },
+        ]
+      },
+      {
+        title: "Location of Property",
+        items: [
+          { l: 'Address', v: selectedProject.landmark || selectedProject.road_name || 'N/A', k: 'landmark' },
+          { l: 'Geo Location', v: getGeoLocationDisplay(selectedProject), k: 'geo_location', ro: true },
+        ]
+      },
+      {
+        title: "Size Of the Property",
+        items: [
+          { l: 'Plot Area', v: selectedProject.plot_area || selectedProject["Plot Area"] || 'N/A', k: 'plot_area' },
+          { l: 'Constructed Area', v: selectedProject.constructed_area || selectedProject["Constructed Area"] || 'N/A', k: 'constructed_area' },
+        ]
+      }
+    ];
+
+    groups.push({
+      title: "Property User",
+      items: [
+        { l: 'Name', v: selectedProject.tenant_name || selectedProject["Tenant Name"], k: 'tenant_name' },
+        { l: 'Profession', v: selectedProject.profession || selectedProject["Profession"], k: 'profession' },
+        { l: 'Purpose of Use', v: selectedProject.purpose_of_use || selectedProject["Purpose of Use"], k: 'purpose_of_use' },
+        { l: 'Contact Information', v: selectedProject.contact_information || selectedProject["Contact Information"], k: 'contact_information' },
+        { l: 'Rental Period', v: selectedProject.rental_period || selectedProject["Rental Period"], k: 'rental_period' },
+        { l: 'Aadhar Number', v: selectedProject.aadhar_number || selectedProject.aadhar_no || selectedProject["Aadhar Number"], k: 'aadhar_number' },
+        { l: 'GST Number', v: selectedProject.gst_number || selectedProject.gst_no || selectedProject["GST Number"], k: 'gst_number' },
+        { l: 'PAN Card Number', v: selectedProject.pan_card_number || selectedProject.pancard_no || selectedProject["PAN Card Number"], k: 'pan_card_number' },
+        { l: 'Rent Amount', v: selectedProject.rent_amount || selectedProject["Rent Amount"], k: 'rent_amount' },
+        { l: 'Renewal Date', v: selectedProject.renewal_date || selectedProject["Renewal Date"], k: 'renewal_date' },
+      ]
+    });
+
+    // Parse section mappings
+    let sectionMappings = {};
+    if (selectedProject.section_mappings) {
+      try {
+        sectionMappings = typeof selectedProject.section_mappings === 'string'
+          ? JSON.parse(selectedProject.section_mappings)
+          : selectedProject.section_mappings;
+      } catch (e) {
+        console.error("Error parsing section_mappings", e);
+      }
+    }
+
+    // Distribute custom attributes
+    Object.keys(selectedProject).forEach(k => {
+      if (!STANDARD_KEYS.includes(k) && k !== 'section_mappings') {
+        const val = selectedProject[k];
+        if (val !== undefined && val !== null) {
+          const targetSectionTitle = sectionMappings[k] || "Property Details";
+          // Check if group exists
+          let group = groups.find(g => g.title === targetSectionTitle);
+          if (!group) {
+            // Fallback to Property Details
+            group = groups.find(g => g.title === "Property Details");
+          }
+          if (group) {
+            // Avoid duplicates
+            if (!group.items.some(item => item.k === k)) {
+              group.items.push({ l: k, v: val, k: k });
+            }
+          }
+        }
+      }
+    });
+
+    return groups;
+  };
 
   useEffect(() => {
     setSelectedJourneyStep(null);
@@ -134,7 +276,209 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
   const [drawnGeomType, setDrawnGeomType] = useState('Polygon')
   const [selectedColor, setSelectedColor] = useState('#1a73e8')
 
-  const [showAddField, setShowAddField] = useState(false)
+  const [categories, setCategories] = useState([])
+  const [layerMetaLookup, setLayerMetaLookup] = useState({})
+  const [formCategory, setFormCategory] = useState('Road')
+  
+  // New Category form states
+  const [showNewCategoryForm, setShowNewCategoryForm] = useState(false)
+  const [newCatName, setNewCatName] = useState('')
+  const [newCatColor, setNewCatColor] = useState('#1a73e8')
+  const [newCatFill, setNewCatFill] = useState(true)
+  const [newCatWeight, setNewCatWeight] = useState(3)
+
+  const loadCategories = async () => {
+    try {
+      const fetched = await fetchCategories()
+      if (fetched) {
+        setCategories(fetched)
+        const lookup = {}
+        fetched.forEach(cat => {
+          lookup[cat.category_name] = {
+            color: cat.color,
+            fill: !!cat.fill,
+            weight: cat.weight !== undefined ? cat.weight : 3
+          }
+        })
+        setLayerMetaLookup(lookup)
+      }
+    } catch (e) {
+      console.error("Failed to load categories:", e)
+    }
+  }
+
+  const handleCreateCategory = async () => {
+    if (!newCatName.trim()) {
+      alert("Category name is required", "error")
+      return
+    }
+    const cleanName = newCatName.trim().replace(/\s+/g, '_')
+    try {
+      const res = await createCategory({
+        category_name: cleanName,
+        color: newCatColor,
+        fill: newCatFill,
+        weight: newCatWeight
+      })
+      if (res && res.success) {
+        alert(`Category ${cleanName} created successfully!`)
+        await loadCategories()
+        setFormCategory(cleanName)
+        setSelectedColor(newCatColor)
+        setShowNewCategoryForm(false)
+        setNewCatName('')
+        setLayerVisibility(prev => ({ ...prev, [cleanName]: true }))
+      } else {
+        alert(res?.error || "Failed to create category", "error")
+      }
+    } catch (err) {
+      alert("Error: " + err.message, "error")
+    }
+  }
+
+  const handleCategoryChange = (e) => {
+    const val = e.target.value
+    setFormCategory(val)
+    const catMeta = layerMetaLookup[val] || LAYER_META[val]
+    if (catMeta && catMeta.color) {
+      setSelectedColor(catMeta.color)
+    }
+  }
+
+  const handlePdfUpload = async (e) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+    
+    // Validate all files
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      const isImage = file.type.startsWith('image/')
+      const isPdf = file.type === 'application/pdf'
+      if (!isImage && !isPdf) {
+        alert(`File "${file.name}" is not supported. Only Images and PDFs are allowed.`, "error")
+        return
+      }
+    }
+    
+    const formData = new FormData()
+    formData.append('project_id', selectedProject.id)
+    for (let i = 0; i < files.length; i++) {
+      formData.append('files', files[i])
+    }
+    
+    try {
+      const res = await fetch(`${API}.upload_project_pdf`, {
+        method: 'POST',
+        headers: { 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' },
+        credentials: 'include',
+        body: formData,
+      })
+      const data = await res.json()
+      if (data.exc) throw new Error(data.exc_type || 'Server error')
+      if (!res.ok) throw new Error(data.message || 'Request failed')
+      
+      const attachmentsList = data.message.attachments
+      alert("Attachments uploaded successfully!")
+      setSelectedProject(prev => ({ ...prev, pdf_attachment: attachmentsList }))
+      loadProjects()
+    } catch (err) {
+      alert("Upload failed: " + err.message, "error")
+    }
+  }
+
+  const handleRemovePdf = async (fileUrl) => {
+    if (!window.confirm("Are you sure you want to remove this attachment?")) return;
+    
+    try {
+      const res = await fetch(`${API}.remove_project_attachment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' },
+        credentials: 'include',
+        body: `project_id=${encodeURIComponent(selectedProject.id)}&file_url=${encodeURIComponent(fileUrl)}`,
+      })
+      const data = await res.json()
+      if (data.exc) throw new Error(data.exc_type || 'Server error')
+      if (!res.ok) throw new Error(data.message || 'Request failed')
+      
+      alert("Attachment removed successfully!")
+      setSelectedProject(prev => {
+        const copy = { ...prev }
+        if (Array.isArray(copy.pdf_attachment)) {
+          copy.pdf_attachment = copy.pdf_attachment.filter(att => att.url !== fileUrl)
+        } else {
+          delete copy.pdf_attachment
+        }
+        return copy
+      })
+      loadProjects()
+    } catch (err) {
+      alert("Remove failed: " + err.message, "error")
+    }
+  }
+
+  const handleTenantAttachmentUpload = async (e) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+    
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      const isValid = file.type.startsWith('image/') || file.type === 'application/pdf' || /\.(jpg|jpeg|png|gif|webp|svg|pdf)$/i.test(file.name)
+      if (!isValid) {
+        alert(`File "${file.name}" is not supported. Only Images and PDFs are allowed.`, "error")
+        return
+      }
+    }
+    
+    setIsUploadingTenantFile(true)
+    const formData = new FormData()
+    formData.append('project_id', selectedProject.id)
+    for (let i = 0; i < files.length; i++) {
+      formData.append('files', files[i])
+    }
+    
+    try {
+      const res = await fetch(`${API}.upload_tenant_attachments`, {
+        method: 'POST',
+        headers: { 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' },
+        credentials: 'include',
+        body: formData,
+      })
+      const data = await res.json()
+      if (data.exc) throw new Error(data.exc_type || 'Server error')
+      if (!res.ok) throw new Error(data.message || 'Request failed')
+      
+      const attachmentsList = data.message.attachments
+      setTenantAttachments(attachmentsList)
+      alert("Tenant attachments uploaded successfully!")
+    } catch (err) {
+      alert("Upload failed: " + err.message, "error")
+    } finally {
+      setIsUploadingTenantFile(false)
+    }
+  }
+
+  const handleRemoveTenantAttachment = async (fileUrl) => {
+    if (!window.confirm("Are you sure you want to remove this attachment?")) return;
+    
+    try {
+      const res = await fetch(`${API}.remove_tenant_attachment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' },
+        credentials: 'include',
+        body: `project_id=${encodeURIComponent(selectedProject.id)}&file_url=${encodeURIComponent(fileUrl)}`,
+      })
+      const data = await res.json()
+      if (data.exc) throw new Error(data.exc_type || 'Server error')
+      if (!res.ok) throw new Error(data.message || 'Request failed')
+      
+      setTenantAttachments(prev => prev.filter(att => att.url !== fileUrl))
+      alert("Attachment removed successfully!")
+    } catch (err) {
+      alert("Remove failed: " + err.message, "error")
+    }
+  }
+
+  const [activeAddFieldSection, setActiveAddFieldSection] = useState(null)
   const [newFieldLabel, setNewFieldLabel] = useState('')
   const [newFieldValue, setNewFieldValue] = useState('')
 
@@ -192,7 +536,10 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
     } catch (e) { console.error(e) }
   }
 
-  useEffect(() => { loadProjects() }, [])
+  useEffect(() => {
+    loadCategories()
+    loadProjects()
+  }, [])
 
   useEffect(() => {
     if (projects.length > 0) {
@@ -213,7 +560,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
 
   useEffect(() => {
     if (liveFilterActive !== undefined) {
-      const liveStatuses = 'Pending for Request,Approved,Submitted';
+      const liveStatuses = 'Pending for Request,Approved,Submitted,Work Started,Ongoing,On Hold,Hold,Near Completion,Completed';
       const newFilter = liveFilterActive ? liveStatuses : null;
       setActiveStatusFilter(newFilter);
       loadProjects(newFilter);
@@ -279,6 +626,27 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
     // but we still keep it in reference so we can use its drawing options programmatically!
     // map.addControl(drawControl)
     drawControlRef.current = drawControl
+
+    const closeAllTooltips = (m) => {
+      if (!m) return;
+      m.eachLayer(layer => {
+        if (layer._tooltip && layer.closeTooltip) {
+          try { layer.closeTooltip(); } catch(e) {}
+        }
+      });
+    };
+
+    // Clear selection and close stuck tooltips when clicking the map background
+    map.on('click', () => {
+      if (mapClickHandledRef.current) return;
+      setSelectedProject(null);
+      closeAllTooltips(map);
+    });
+
+    // Close tooltips when map begins to pan or zoom to prevent stuck tooltips
+    map.on('zoomstart movestart', () => {
+      closeAllTooltips(map);
+    });
 
     map.on(L.Draw.Event.CREATED, (e) => {
       const layer = e.layer
@@ -372,7 +740,38 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
     if (!map || !mainGroup) return
 
     // 1. Clear existing category groups from mainGroup and the ref
-    Object.values(categoryGroupsRef.current).forEach(group => mainGroup.removeLayer(group))
+    if (map) {
+      map.eachLayer(layer => {
+        if (layer._tooltip && layer.closeTooltip) {
+          try { layer.closeTooltip(); } catch(e) {}
+        }
+      });
+    }
+    Object.values(categoryGroupsRef.current).forEach(group => {
+      if (group.eachLayer) {
+        group.eachLayer(layer => {
+          try {
+            if (layer.closeTooltip && layer._map) {
+              layer.closeTooltip();
+            }
+            if (layer.unbindTooltip) {
+              layer.unbindTooltip();
+            }
+          } catch (err) {
+            // Safe fallback: manually clear _tooltip references if unbind fails
+            if (layer._tooltip) {
+              try {
+                if (map && map.closeTooltip) {
+                  map.closeTooltip(layer._tooltip);
+                }
+              } catch (e) {}
+              layer._tooltip = null;
+            }
+          }
+        });
+      }
+      mainGroup.removeLayer(group);
+    });
     categoryGroupsRef.current = {}
 
     if (projects.length === 0) return;
@@ -388,12 +787,16 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         categoryGroupsRef.current[p.type] = L.featureGroup()
       }
 
-      // Always force green for post-approval statuses, dark green for Completed
-      let color = p.color || '#1a73e8'
-      if (p.status === 'Completed') {
-        color = '#14532d' // Dark Green for completed
-      } else if (['Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion'].includes(p.status)) {
-        color = '#16a34a' // Always Green for approved & all post-approval statuses
+      // Get layer meta configuration
+      const meta = layerMetaLookup[p.type] || LAYER_META[p.type] || {}
+      const defaultColor = meta.color || '#1a73e8'
+      const shouldFill = meta.fill !== false
+      const layerWeight = meta.weight !== undefined ? meta.weight : (p.geom_type?.toLowerCase().includes('line') ? 5 : 3)
+
+      // Always force green for post-approval statuses
+      let color = p.color || defaultColor
+      if (['Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion', 'Completed'].includes(p.status)) {
+        color = '#16a34a' // Always Green for approved & all post-approval statuses including Completed
       } else if (p.status === 'Pending for Request') {
         color = '#f97316' // Vibrant Orange for pending features
       } else if (p.status === 'Submitted') {
@@ -402,38 +805,26 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
       let layer;
       if (!p.coordinates || p.coordinates.length === 0) return;
       try {
-        const isClosedLoop = () => {
-          let coords = p.coordinates;
-          if (!Array.isArray(coords) || coords.length === 0) return false;
-
-          // If it is a double-nested coordinate array (e.g. GeoJSON polygon ring), extract the outer ring
-          if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
-            coords = coords[0];
-          }
-
-          if (coords.length >= 4) {
-            const first = coords[0];
-            const last = coords[coords.length - 1];
-            if (first && last && typeof first[0] === 'number' && typeof last[0] === 'number') {
-              return Math.abs(first[0] - last[0]) < 0.005 && Math.abs(first[1] - last[1]) < 0.005;
-            }
-          }
-          return false;
-        };
-
         if (p.geom_type?.toLowerCase().includes('point')) {
           const pt = typeof p.coordinates[0] === 'number' ? p.coordinates : p.coordinates[0];
           layer = L.circleMarker(pt, { radius: 6, color: '#fff', fillColor: color, fillOpacity: 0.9, weight: 2 })
-        } else if ((p.geom_type?.toLowerCase().includes('line') || p.geom_type?.toLowerCase().includes('string')) && !isClosedLoop()) {
-          layer = L.polyline(p.coordinates, { color, weight: 5, opacity: 0.8 })
+        } else if (p.geom_type?.toLowerCase().includes('line') || p.geom_type?.toLowerCase().includes('string')) {
+          layer = L.polyline(p.coordinates, { color, weight: layerWeight, opacity: 0.8 })
         } else {
-          layer = L.polygon(p.coordinates, { color, fillColor: color, fillOpacity: 0.85, weight: 3 })
+          layer = L.polygon(p.coordinates, {
+            color,
+            fillColor: color,
+            fill: shouldFill,
+            fillOpacity: shouldFill ? 0.25 : 0,
+            weight: layerWeight
+          })
         }
 
         layer.projectId = p.id
         layer.bindTooltip(p.name, { sticky: true }).on('click', (e) => {
-          L.DomEvent.stopPropagation(e)
-          setSelectedProject(p)
+          mapClickHandledRef.current = true;
+          setTimeout(() => { mapClickHandledRef.current = false; }, 50);
+          setSelectedProject(p);
         })
 
         categoryGroupsRef.current[p.type].addLayer(layer)
@@ -540,6 +931,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
 
   const handleDrawPolygon = () => {
     if (mapInstanceRef.current && drawControlRef.current) {
+      setSelectedProject(null); // Clear active selection when drawing new geometry
       drawnLayersRef.current.clearLayers();
       setDrawnCoordinates(null);
 
@@ -569,10 +961,91 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
               <div><label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', marginBottom: '6px' }}>Project Name *</label><input name="name" required style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }} /></div>
               <div>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', marginBottom: '6px' }}>Category *</label>
-                <select name="project_type" defaultValue="Road" required style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }}>
-                  {Object.keys(LAYER_META).map(k => <option key={k} value={k}>{k.replace(/_/g, ' ')}</option>)}
-                </select>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <select 
+                    name="project_type" 
+                    value={formCategory} 
+                    onChange={handleCategoryChange}
+                    required 
+                    style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #ddd', outline: 'none' }}
+                  >
+                    {categories.length > 0 ? (
+                      categories.map(c => <option key={c.category_name} value={c.category_name}>{c.category_name.replace(/_/g, ' ')}</option>)
+                    ) : (
+                      Object.keys(LAYER_META).map(k => <option key={k} value={k}>{k.replace(/_/g, ' ')}</option>)
+                    )}
+                  </select>
+                  <button 
+                    type="button" 
+                    onClick={() => setShowNewCategoryForm(!showNewCategoryForm)} 
+                    style={{ padding: '10px 14px', background: '#e8f0fe', color: '#1a73e8', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    {showNewCategoryForm ? '✕' : '+ New'}
+                  </button>
+                </div>
               </div>
+
+              {showNewCategoryForm && (
+                <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '12px', border: '1px dashed #1a73e8', display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '4px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#1a73e8' }}>➕ Create New Category</div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: 'bold', marginBottom: '4px', color: '#555' }}>Category Name *</label>
+                    <input 
+                      value={newCatName} 
+                      onChange={e => setNewCatName(e.target.value)} 
+                      placeholder="e.g. Garden, Office_Plots"
+                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ddd', fontSize: '13px', boxSizing: 'border-box' }} 
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 'bold', marginBottom: '4px', color: '#555' }}>Color</label>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <input 
+                          type="color" 
+                          value={newCatColor} 
+                          onChange={e => setNewCatColor(e.target.value)} 
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', width: '32px', height: '32px', padding: 0 }} 
+                        />
+                        <input 
+                          type="text" 
+                          value={newCatColor} 
+                          onChange={e => setNewCatColor(e.target.value)} 
+                          style={{ width: '80px', padding: '6px', borderRadius: '6px', border: '1px solid #ddd', fontSize: '13px' }} 
+                        />
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', height: '32px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer', color: '#555' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={newCatFill} 
+                          onChange={e => setNewCatFill(e.target.checked)} 
+                        />
+                        Fill Shape
+                      </label>
+                    </div>
+                    <div style={{ width: '70px' }}>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 'bold', marginBottom: '4px', color: '#555' }}>Weight</label>
+                      <input 
+                        type="number" 
+                        min="1" 
+                        max="10" 
+                        value={newCatWeight} 
+                        onChange={e => setNewCatWeight(parseInt(e.target.value) || 3)} 
+                        style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #ddd', fontSize: '13px', boxSizing: 'border-box' }} 
+                      />
+                    </div>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={handleCreateCategory} 
+                    style={{ background: '#1a73e8', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', alignSelf: 'flex-end' }}
+                  >
+                    Save Category
+                  </button>
+                </div>
+              )}
               <div style={{ background: '#f8f9fa', padding: '12px', borderRadius: '8px', fontSize: '12px', color: '#666', border: '1px dashed #ccc', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span>🎨 Selected Style:</span>
@@ -599,7 +1072,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0' }}>
           {dynamicProjectTypes.map(type => {
             const count = projectCounts[type] || 0
-            const meta = LAYER_META[type] || { color: '#ccc' }
+            const meta = layerMetaLookup[type] || LAYER_META[type] || { color: '#ccc' }
             return (
               <div key={type} style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '15px', borderBottom: '1px solid #f9f9f9' }}>
                 <input type="checkbox" checked={isLayerVisible(type)} onChange={e => setLayerVisibility({ ...layerVisibility, [type]: e.target.checked })} />
@@ -722,53 +1195,373 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
           <div style={{ position: 'absolute', top: '85px', right: showLayers ? '20px' : '80px', width: 'calc(100% - 40px)', maxWidth: '350px', background: 'white', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', border: '1px solid #f1f5f9', zIndex: 1002, display: 'flex', flexDirection: 'column', maxHeight: 'calc(100% - 110px)', overflow: 'hidden' }}>
             <div style={{ padding: '20px', background: '#1a73e8', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><h4 style={{ margin: 0 }}>Attributes</h4><button onClick={() => setSelectedProject(null)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer' }}>✕</button></div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '15px', minHeight: 0 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                <tbody>
-                  {[
-                    { l: 'Project ID', v: selectedProject.id, k: 'id' },
-                    { l: 'Name', v: selectedProject.name, k: 'name' },
-                    { l: 'Type', v: selectedProject.type, k: 'type' },
-                    { l: 'Ward', v: selectedProject.ward, k: 'ward' },
-                    { l: 'Status', v: selectedProject.status, k: 'status' },
-                    { l: 'Road Name', v: selectedProject.road_name, k: 'road_name' },
-                    { l: 'Road No', v: selectedProject.road_no, k: 'road_no' },
-                    { l: 'Road Type', v: selectedProject.road_type, k: 'road_type' },
-                    { l: 'Pave Type', v: selectedProject.pave_type, k: 'pave_type' },
-                    { l: 'Landmark', v: selectedProject.landmark, k: 'landmark' },
-                    { l: 'Authority', v: selectedProject.authority, k: 'authority' },
-                    { l: 'Traffic', v: selectedProject.traffic, k: 'traffic' },
-                    { l: 'Width', v: selectedProject.width, k: 'width' },
-                    { l: 'SHAPE Length', v: selectedProject.shape_length, k: 'shape_length' },
-                    { l: 'UNP Name', v: selectedProject.unp_name, k: 'unp_name' },
-                    { l: 'UNP Type', v: selectedProject.unp_type, k: 'unp_type' },
-                    { l: 'DMA No', v: selectedProject.dma_no, k: 'dma_no' },
-                    { l: 'Ward No', v: selectedProject.ward_no, k: 'ward_no' },
-                    { l: 'Junction Name', v: selectedProject.junc_name, k: 'junc_name' },
-                    { l: 'Facility', v: selectedProject.facility, k: 'facility' },
-                    { l: 'Rail Route', v: selectedProject.rail_route, k: 'rail_route' },
-                    { l: 'Bridge Name', v: selectedProject.bridg_name, k: 'bridg_name' },
-                    { l: 'Bridge Type', v: selectedProject.bridg_type, k: 'bridg_type' },
-                    { l: 'Flyover Name', v: selectedProject.fly_name, k: 'fly_name' },
-                    { l: 'Description', v: selectedProject.description, k: 'description' },
-                    { l: 'Remarks', v: selectedProject.remarks, k: 'remarks' },
-                    { l: 'Approver', v: selectedProject.approver, k: 'approver', ro: true },
-                    ...Object.keys(selectedProject).filter(k => !STANDARD_KEYS.includes(k)).map(k => ({ l: k, v: selectedProject[k], k: k }))
-                  ].filter(r => r.v || isEditing).map((r, i) => (
-                    <tr key={i}>
-                      <td style={{ padding: '8px', fontWeight: 'bold', color: '#666', width: '40%', maxWidth: '120px', wordBreak: 'break-word', verticalAlign: 'top' }}>{r.l}</td>
-                      <td style={{ padding: '8px', wordBreak: 'break-word' }}>
-                        {isEditing && r.k !== 'id' && !r.ro ? (
-                          <input
-                            value={r.v || ''}
-                            onChange={(e) => setSelectedProject({ ...selectedProject, [r.k]: e.target.value })}
-                            style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                          />
-                        ) : r.v}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {getGroupedAttributes().map((group, groupIdx) => (
+                <div key={groupIdx} style={{ marginBottom: '18px' }}>
+                  <div style={{ 
+                    fontSize: '11px', 
+                    fontWeight: '800', 
+                    color: '#1a73e8', 
+                    textTransform: 'uppercase', 
+                    letterSpacing: '0.5px',
+                    paddingBottom: '6px',
+                    borderBottom: '2px solid #e2e8f0',
+                    marginBottom: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}>
+                    {group.title}
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                    <tbody>
+                      {group.items.filter(r => r.v || isEditing).map((r, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: '6px 8px', fontWeight: 'bold', color: '#64748b', width: '40%', maxWidth: '120px', wordBreak: 'break-word', verticalAlign: 'top' }}>{r.l}</td>
+                          <td style={{ padding: '6px 8px', wordBreak: 'break-word', color: '#0f172a' }}>
+                            {isEditing && r.k !== 'id' && !r.ro ? (
+                              <input
+                                value={(() => {
+                                  const rawVal = selectedProject[r.k] !== undefined && selectedProject[r.k] !== null ? selectedProject[r.k] : (selectedProject[r.l] !== undefined && selectedProject[r.l] !== null ? selectedProject[r.l] : '');
+                                  return (rawVal === 'N/A') ? '' : rawVal;
+                                })()}
+                                onChange={(e) => setSelectedProject({ ...selectedProject, [r.k]: e.target.value })}
+                                style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
+                              />
+                            ) : r.v}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Inline Add Field Form */}
+                  {activeAddFieldSection === group.title ? (
+                    <div style={{ 
+                      marginTop: '10px', 
+                      padding: '10px', 
+                      background: '#f8fafc', 
+                      borderRadius: '8px', 
+                      border: '1px solid #e2e8f0',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px'
+                    }}>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <input 
+                          placeholder="Field Name" 
+                          value={newFieldLabel} 
+                          onChange={(e) => setNewFieldLabel(e.target.value)} 
+                          style={{ 
+                            flex: 1, 
+                            padding: '6px', 
+                            borderRadius: '4px', 
+                            border: '1px solid #cbd5e1', 
+                            fontSize: '12px',
+                            width: '50%'
+                          }} 
+                        />
+                        <input 
+                          placeholder="Value" 
+                          value={newFieldValue} 
+                          onChange={(e) => setNewFieldValue(e.target.value)} 
+                          style={{ 
+                            flex: 1, 
+                            padding: '6px', 
+                            borderRadius: '4px', 
+                            border: '1px solid #cbd5e1', 
+                            fontSize: '12px',
+                            width: '50%'
+                          }} 
+                        />
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            setActiveAddFieldSection(null);
+                            setNewFieldLabel('');
+                            setNewFieldValue('');
+                          }} 
+                          style={{ 
+                            padding: '4px 10px', 
+                            background: '#f1f5f9', 
+                            color: '#475569', 
+                            border: 'none', 
+                            borderRadius: '4px', 
+                            cursor: 'pointer', 
+                            fontWeight: '600',
+                            fontSize: '11px'
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={async () => {
+                            if (!newFieldLabel.trim()) {
+                              alert("Please enter a field name.", "error");
+                              return;
+                            }
+                            if (!newFieldValue.trim()) {
+                              alert("Please enter a value.", "error");
+                              return;
+                            }
+                            const lowerLabel = newFieldLabel.trim().toLowerCase();
+                            const isStandard = STANDARD_KEYS.some(k => k.toLowerCase() === lowerLabel);
+                            if (isStandard) {
+                              alert("This field name is reserved. Please choose a different label.", "error");
+                              return;
+                            }
+
+                            // Collect all existing custom attributes
+                            const customAttrs = {};
+                            Object.keys(selectedProject).forEach(k => {
+                              if (!STANDARD_KEYS.includes(k) && k !== 'section_mappings') {
+                                customAttrs[k] = selectedProject[k];
+                              }
+                            });
+
+                            // Parse and update section mappings
+                            let sectionMappings = {};
+                            if (selectedProject.section_mappings) {
+                              try {
+                                sectionMappings = typeof selectedProject.section_mappings === 'string'
+                                  ? JSON.parse(selectedProject.section_mappings)
+                                  : selectedProject.section_mappings;
+                              } catch (e) {}
+                            }
+                            const updatedMappings = { ...sectionMappings };
+                            updatedMappings[newFieldLabel.trim()] = group.title;
+
+                            customAttrs[newFieldLabel.trim()] = newFieldValue.trim();
+                            customAttrs["section_mappings"] = updatedMappings;
+
+                            try {
+                              const res = await updateCustomAttributes(selectedProject.id, customAttrs);
+                              const updatedProject = {
+                                ...selectedProject,
+                                [newFieldLabel.trim()]: newFieldValue.trim(),
+                                section_mappings: updatedMappings,
+                                custom_attributes: JSON.stringify(customAttrs)
+                              };
+                              if (res && res.id) {
+                                updatedProject.id = res.id;
+                                if (res.id !== selectedProject.id) {
+                                  updatedProject.status = 'Draft';
+                                  alert(`A new project copy has been created (ID: ${res.id}) with the status 'Draft'.`);
+                                } else {
+                                  alert("Field added successfully!");
+                                }
+                              } else {
+                                alert("Field added successfully!");
+                              }
+                              setSelectedProject(updatedProject);
+                              setActiveAddFieldSection(null);
+                              setNewFieldLabel('');
+                              setNewFieldValue('');
+                              loadProjects();
+                            } catch (e) {
+                              alert('Failed to save field: ' + e.message, 'error');
+                            }
+                          }} 
+                          style={{ 
+                            padding: '4px 10px', 
+                            background: '#1a73e8', 
+                            color: 'white', 
+                            border: 'none', 
+                            borderRadius: '4px', 
+                            cursor: 'pointer', 
+                            fontWeight: '600',
+                            fontSize: '11px'
+                          }}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: '6px', textAlign: 'right' }}>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setActiveAddFieldSection(group.title);
+                          setNewFieldLabel('');
+                          setNewFieldValue('');
+                        }} 
+                        style={{ 
+                          background: 'none', 
+                          border: 'none', 
+                          color: '#1a73e8', 
+                          cursor: 'pointer', 
+                          fontSize: '11.5px', 
+                          fontWeight: '700',
+                          padding: '4px 8px',
+                          borderRadius: '4px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px'
+                        }}
+                      >
+                        ➕ Add Field
+                      </button>
+                    </div>
+                  )}
+                  
+                  {group.title === "Property User" && (
+                    <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #cbd5e1' }}>
+                      <div style={{ fontSize: '11px', fontWeight: '850', color: '#64748b', textTransform: 'uppercase', marginBottom: '8px' }}>
+                        📄 Tenant Attachments (Images/PDFs)
+                      </div>
+                      {(() => {
+                        const attachments = (() => {
+                          const raw = selectedProject.tenant_attachments || selectedProject["Tenant Attachments"];
+                          if (!raw) return [];
+                          if (Array.isArray(raw)) return raw;
+                          if (typeof raw === 'string') {
+                            const trimmed = raw.trim();
+                            if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+                              try {
+                                return JSON.parse(trimmed);
+                              } catch (e) {}
+                            }
+                            return [{ name: raw.split('/').pop(), url: raw }];
+                          }
+                          return [];
+                        })();
+
+                        if (attachments.length === 0) {
+                          return <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>No tenant attachments uploaded.</span>;
+                        }
+
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {attachments.map((att, index) => {
+                              const isImg = /\.(jpg|jpeg|png|gif|webp|svg)($|\?)/i.test(att.url);
+                              return (
+                                <div 
+                                  key={index} 
+                                  style={{ 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    justifyContent: 'space-between', 
+                                    padding: '6px 8px', 
+                                    background: '#f8fafc', 
+                                    borderRadius: '8px', 
+                                    border: '1px solid #cbd5e1',
+                                    gap: '6px'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0 }}>
+                                    {isImg ? (
+                                      <div 
+                                        onClick={() => window.open(att.url, '_blank')}
+                                        style={{ 
+                                          width: '28px', 
+                                          height: '28px', 
+                                          borderRadius: '4px', 
+                                          overflow: 'hidden', 
+                                          border: '1px solid #cbd5e1', 
+                                          cursor: 'zoom-in',
+                                          flexShrink: 0
+                                        }}
+                                      >
+                                        <img src={att.url} alt="thumb" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                      </div>
+                                    ) : (
+                                      <span style={{ fontSize: '16px', flexShrink: 0 }}>📕</span>
+                                    )}
+                                    <span 
+                                      style={{ 
+                                        fontSize: '11px', 
+                                        fontWeight: '500', 
+                                        color: '#334155', 
+                                        textOverflow: 'ellipsis', 
+                                        overflow: 'hidden', 
+                                        whiteSpace: 'nowrap' 
+                                      }}
+                                      title={att.name}
+                                    >
+                                      {att.name}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                                    <button 
+                                      type="button"
+                                      onClick={() => setPreviewFile(att)}
+                                      title="View / Preview"
+                                      style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        justifyContent: 'center', 
+                                        width: '24px', 
+                                        height: '24px', 
+                                        borderRadius: '4px', 
+                                        background: '#10b981', 
+                                        color: 'white', 
+                                        border: 'none', 
+                                        cursor: 'pointer',
+                                        fontSize: '11px'
+                                      }}
+                                    >
+                                      👁️
+                                    </button>
+                                    <button 
+                                      type="button"
+                                      onClick={async () => {
+                                        if (!window.confirm("Are you sure you want to remove this tenant attachment?")) return;
+                                        try {
+                                          const res = await fetch(`${API}.remove_tenant_attachment`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' },
+                                            credentials: 'include',
+                                            body: `project_id=${encodeURIComponent(selectedProject.id)}&file_url=${encodeURIComponent(att.url)}`,
+                                          });
+                                          const data = await res.json();
+                                          if (data.exc) throw new Error(data.exc_type || 'Server error');
+                                          if (!res.ok) throw new Error(data.message || 'Request failed');
+                                          
+                                          alert("Attachment removed successfully!");
+                                          setSelectedProject(prev => {
+                                            const copy = { ...prev };
+                                            const oldList = copy.tenant_attachments || copy["Tenant Attachments"] || [];
+                                            const newList = (Array.isArray(oldList) ? oldList : JSON.parse(oldList)).filter(a => a.url !== att.url);
+                                            copy.tenant_attachments = newList;
+                                            copy["Tenant Attachments"] = newList;
+                                            return copy;
+                                          });
+                                          loadProjects();
+                                        } catch (err) {
+                                          alert("Remove failed: " + err.message, "error");
+                                        }
+                                      }} 
+                                      title="Remove"
+                                      style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        justifyContent: 'center', 
+                                        width: '24px', 
+                                        height: '24px', 
+                                        borderRadius: '4px', 
+                                        background: '#ef4444', 
+                                        color: 'white', 
+                                        border: 'none', 
+                                        cursor: 'pointer',
+                                        fontSize: '10px'
+                                      }}
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              ))}
 
               {/* Amazon-style Horizontal Progress Tracker */}
               {(() => {
@@ -1009,110 +1802,911 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                   </div>
                 );
               })()}
+
+              {/* Attachment Card (PDF/Image) */}
+              <div style={{ marginTop: '20px', borderTop: '2px solid #f1f5f9', paddingTop: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <h5 style={{ margin: 0, color: '#0f172a', fontSize: '13px', fontWeight: '800', letterSpacing: '0.3px' }}>📄 Project Attachments (Images/PDFs)</h5>
+                </div>
+                {(() => {
+                  const attachments = (() => {
+                    const raw = selectedProject.pdf_attachment;
+                    if (!raw) return [];
+                    if (Array.isArray(raw)) return raw;
+                    if (typeof raw === 'string') {
+                      const trimmed = raw.trim();
+                      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+                        try {
+                          return JSON.parse(trimmed);
+                        } catch (e) {}
+                      }
+                      return [{ name: raw.split('/').pop(), url: raw }];
+                    }
+                    return [];
+                  })();
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {attachments.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {attachments.map((att, index) => {
+                            const isImg = /\.(jpg|jpeg|png|gif|webp|svg)($|\?)/i.test(att.url);
+                            return (
+                              <div 
+                                key={index} 
+                                style={{ 
+                                  display: 'flex', 
+                                  alignItems: 'center', 
+                                  justifyContent: 'space-between', 
+                                  padding: '8px 10px', 
+                                  background: '#f8fafc', 
+                                  borderRadius: '10px', 
+                                  border: '1px solid #e2e8f0',
+                                  gap: '8px'
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                  {isImg ? (
+                                    <div 
+                                      onClick={() => window.open(att.url, '_blank')}
+                                      style={{ 
+                                        width: '32px', 
+                                        height: '32px', 
+                                        borderRadius: '6px', 
+                                        overflow: 'hidden', 
+                                        border: '1px solid #cbd5e1', 
+                                        cursor: 'zoom-in',
+                                        flexShrink: 0
+                                      }}
+                                    >
+                                      <img src={att.url} alt="thumb" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize: '18px', flexShrink: 0 }}>📕</span>
+                                  )}
+                                  <span 
+                                    style={{ 
+                                      fontSize: '11px', 
+                                      fontWeight: '500', 
+                                      color: '#334155', 
+                                      textOverflow: 'ellipsis', 
+                                      overflow: 'hidden', 
+                                      whiteSpace: 'nowrap' 
+                                    }}
+                                    title={att.name}
+                                  >
+                                    {att.name}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                                  <button 
+                                    onClick={() => setPreviewFile(att)}
+                                    title="View / Preview"
+                                    style={{ 
+                                      display: 'flex', 
+                                      alignItems: 'center', 
+                                      justifyContent: 'center', 
+                                      width: '28px', 
+                                      height: '28px', 
+                                      borderRadius: '6px', 
+                                      background: '#10b981', 
+                                      color: 'white', 
+                                      border: 'none', 
+                                      cursor: 'pointer',
+                                      fontSize: '12px'
+                                    }}
+                                  >
+                                    👁️
+                                  </button>
+                                  <button 
+                                    onClick={() => handleRemovePdf(att.url)} 
+                                    title="Remove"
+                                    style={{ 
+                                      display: 'flex', 
+                                      alignItems: 'center', 
+                                      justifyContent: 'center', 
+                                      width: '28px', 
+                                      height: '28px', 
+                                      borderRadius: '6px', 
+                                      background: '#ef4444', 
+                                      color: 'white', 
+                                      border: 'none', 
+                                      cursor: 'pointer',
+                                      fontSize: '11px'
+                                    }}
+                                  >
+                                    🗑️
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <div style={{ background: '#f8fafc', border: '1.5px dashed #cbd5e1', borderRadius: '12px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', justifyContent: 'center' }}>
+                        <span style={{ fontSize: '18px' }}>📤</span>
+                        <input 
+                          type="file" 
+                          multiple
+                          accept="image/*,application/pdf" 
+                          onChange={handlePdfUpload} 
+                          style={{ fontSize: '11px', maxWidth: '100%', color: '#475569' }} 
+                        />
+                        <span style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center' }}>Supported formats: Images or PDFs (Multiple allowed)</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
             <div style={{ padding: '15px', borderTop: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {showAddField ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <input placeholder="Label (e.g. Area)" value={newFieldLabel} onChange={(e) => setNewFieldLabel(e.target.value)} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #ddd', fontSize: '13px', width: '50%' }} />
-                    <input placeholder="Value (e.g. 100 sqft)" value={newFieldValue} onChange={(e) => setNewFieldValue(e.target.value)} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #ddd', fontSize: '13px', width: '50%' }} />
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={async () => {
-                      if (newFieldLabel && newFieldValue) {
-                        const customAttrs = {};
-                        Object.keys(selectedProject).forEach(k => {
-                          if (!STANDARD_KEYS.includes(k)) customAttrs[k] = selectedProject[k];
-                        });
-                        customAttrs[newFieldLabel] = newFieldValue;
-
-                        try {
-                          const res = await updateCustomAttributes(selectedProject.id, customAttrs);
-                          if (res && res.id) {
-                            alert(`A new project copy has been created (ID: ${res.id}) with the status 'Draft'.`);
-                            setSelectedProject({
-                              ...selectedProject,
-                              id: res.id,
-                              status: 'Draft',
-                              [newFieldLabel]: newFieldValue,
-                              custom_attributes: JSON.stringify(customAttrs)
-                            });
-                          } else {
-                            setSelectedProject({
-                              ...selectedProject,
-                              [newFieldLabel]: newFieldValue,
-                              custom_attributes: JSON.stringify(customAttrs)
-                            });
-                          }
-                          setShowAddField(false);
-                          setNewFieldLabel('');
-                          setNewFieldValue('');
-                          loadProjects(); // refresh map to ensure consistency
-                        } catch (e) {
-                          alert('Failed to save field: ' + e.message);
-                        }
-                      }
-                    }} style={{ flex: 1, padding: '8px', background: '#1a73e8', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Save Field</button>
-                    <button onClick={() => { setShowAddField(false); setNewFieldLabel(''); setNewFieldValue(''); }} style={{ flex: 1, padding: '8px', background: '#f1f5f9', color: '#333', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {['Approved', 'Work Started', 'Ongoing', 'Hold', 'Near Completion'].includes(selectedProject.status) && (
-                    <button onClick={() => {
-                      const NEXT = { 'Approved': 'Work Started', 'Work Started': 'Ongoing', 'Ongoing': 'Near Completion', 'Near Completion': 'Completed', 'Hold': 'Ongoing' };
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {['Submitted', 'Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion'].includes(selectedProject.status) && (
+                  <button 
+                    onClick={() => {
+                      const NEXT = { 'Submitted': 'Approved', 'Approved': 'Work Started', 'Work Started': 'Ongoing', 'Ongoing': 'Near Completion', 'Near Completion': 'Completed', 'Hold': 'Ongoing', 'On Hold': 'Ongoing' };
                       const nextStatus = NEXT[selectedProject.status] || 'Work Started';
                       loadTimelineStageData(nextStatus);
                       setShowStatusTimelinePopup(true);
-                    }} style={{ width: '100%', padding: '11px', background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(37,99,235,0.3)', letterSpacing: '0.3px' }}>
-                      📦 Update Progress
-                    </button>
-                  )}
+                    }} 
+                    style={{ 
+                      width: '100%', 
+                      padding: '11px', 
+                      background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', 
+                      color: 'white', 
+                      border: 'none', 
+                      borderRadius: '10px', 
+                      cursor: 'pointer', 
+                      fontWeight: '700', 
+                      fontSize: '13px', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center', 
+                      gap: '6px', 
+                      boxShadow: '0 4px 12px rgba(37,99,235,0.3)', 
+                      letterSpacing: '0.3px' 
+                    }}
+                  >
+                    📦 Update Progress
+                  </button>
+                )}
+                {['Draft', 'Correction'].includes(selectedProject.status) ? (
                   <div style={{ display: 'flex', gap: '10px' }}>
-                    <button onClick={() => setShowAddField(true)} style={{ flex: 1, padding: '10px', background: '#e8f0fe', color: '#1a73e8', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}>➕ Add Field</button>
-                    <button onClick={() => setShowInitiatePopup(true)} style={{ flex: 1.2, padding: '10px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                    <button 
+                      onClick={() => setShowInitiatePopup(true)} 
+                      style={{ 
+                        flex: 1, 
+                        padding: '10px 4px', 
+                        background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '8px', 
+                        cursor: 'pointer', 
+                        fontWeight: 'bold', 
+                        fontSize: '11.5px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        gap: '3px',
+                        boxShadow: '0 4px 12px rgba(26,115,232,0.2)',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
                       {selectedProject.status === 'Correction' ? '🚀 Resubmit Proposal' : '🚀 Initiate Proposal'}
                     </button>
+                    <button 
+                      onClick={() => setShowGenerateDemandPopup(true)} 
+                      style={{ 
+                        flex: 1, 
+                        padding: '10px 4px', 
+                        background: '#10b981', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '8px', 
+                        cursor: 'pointer', 
+                        fontWeight: 'bold', 
+                        fontSize: '11.5px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        gap: '3px',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      🧾 Generate Demand
+                    </button>
                   </div>
+                ) : (
                   <div style={{ display: 'flex', gap: '10px' }}>
-                    {isEditing ? (
-                      <button onClick={async () => {
+                    <button 
+                      onClick={() => setShowGenerateDemandPopup(true)} 
+                      style={{ 
+                        flex: 1, 
+                        padding: '10px', 
+                        background: '#10b981', 
+                        color: 'white', 
+                        border: 'none', 
+                        borderRadius: '8px', 
+                        cursor: 'pointer', 
+                        fontWeight: 'bold', 
+                        fontSize: '13px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        gap: '4px' 
+                      }}
+                    >
+                      🧾 Generate Demand
+                    </button>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  {isEditing ? (
+                    <button 
+                      onClick={async () => {
                         try {
                           const data = { ...selectedProject };
-                          delete data.coordinates;
-                          const res = await fetch('/api/method/frappe.client.set_value', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ doctype: 'GIS Project', name: selectedProject.id, fieldname: data })
-                          }).then(r => r.json());
-                          if (!res.exc) {
-                            alert('Project details updated successfully!');
-                            setIsEditing(false);
-                            loadProjects();
-                          } else {
-                            throw new Error(res.exc);
-                          }
+                          
+                          // list of standard database columns in GIS Project doctype
+                          const validDbFields = [
+                            'project_name', 'road_name', 'ward', 'project_type', 'status', 'submitted_by_role',
+                            'budget', 'road_length', 'start_date', 'completion_date', 'road_no', 'road_type',
+                            'pave_type', 'landmark', 'authority', 'traffic', 'width', 'shape_length',
+                            'unp_name', 'unp_type', 'description', 'contractor_details', 'remarks', 'color',
+                            'dma_no', 'ward_no', 'junc_name', 'facility', 'rail_route', 'bridg_type', 'fly_name'
+                          ];
+                          
+                          const dbData = {};
+                          validDbFields.forEach(f => {
+                            if (data[f] !== undefined) {
+                              dbData[f] = data[f];
+                            }
+                          });
+
+                          // list of custom fields with key (scrubbed) and label (capitalized)
+                          const customFields = [
+                             { key: 'plot_area', label: 'Plot Area' },
+                             { key: 'constructed_area', label: 'Constructed Area' },
+                             { key: 'tenant_name', label: 'Tenant Name' },
+                             { key: 'profession', label: 'Profession' },
+                             { key: 'purpose_of_use', label: 'Purpose of Use' },
+                             { key: 'contact_information', label: 'Contact Information' },
+                             { key: 'rental_period', label: 'Rental Period' },
+                             { key: 'aadhar_number', label: 'Aadhar Number', alias: 'aadhar_no' },
+                             { key: 'gst_number', label: 'GST Number', alias: 'gst_no' },
+                             { key: 'pan_card_number', label: 'PAN Card Number', alias: 'pancard_no' },
+                             { key: 'rent_amount', label: 'Rent Amount' },
+                             { key: 'renewal_date', label: 'Renewal Date' },
+                             { key: 'tenant_attachments', label: 'Tenant Attachments' }
+                           ];
+
+                           const customAttrs = {};
+                           customFields.forEach(f => {
+                             let val = data[f.key];
+                             if (val === undefined) {
+                               val = data[f.label];
+                             }
+                             if (val === undefined && f.alias) {
+                               val = data[f.alias];
+                             }
+                             if (val !== undefined) {
+                               customAttrs[f.label] = val;
+                             }
+                           });
+
+                           // Collect all other dynamic custom fields from selectedProject keys
+                           Object.keys(data).forEach(k => {
+                             if (!STANDARD_KEYS.includes(k) && k !== 'section_mappings') {
+                               customAttrs[k] = data[k];
+                             }
+                           });
+                           if (data.section_mappings) {
+                             customAttrs["section_mappings"] = data.section_mappings;
+                           }
+
+                           // 1. Save standard fields via set_value
+                           const resDb = await fetch('/api/method/frappe.client.set_value', {
+                             method: 'POST',
+                             headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRToken': window.csrf_token || 'fetch' },
+                             body: JSON.stringify({ doctype: 'GIS Project', name: selectedProject.id, fieldname: dbData })
+                           }).then(r => r.json());
+
+                           if (resDb.exc) throw new Error(resDb.exc_type || 'Failed to update database fields');
+
+                           // 2. Save custom fields via updateCustomAttributes
+                           if (Object.keys(customAttrs).length > 0) {
+                             const resCustom = await updateCustomAttributes(selectedProject.id, customAttrs);
+                             if (resCustom && resCustom.id) {
+                               // If project duplicated on save, update ID and status locally
+                               setSelectedProject(prev => {
+                                 const updated = {
+                                   ...prev,
+                                   ...dbData,
+                                   ...customAttrs,
+                                   id: resCustom.id
+                                 };
+                                 if (resCustom.id !== selectedProject.id) {
+                                   updated.status = 'Draft';
+                                 }
+                                 return updated;
+                               });
+                             }
+                           }
+
+                          alert('Project details updated successfully!');
+                          setIsEditing(false);
+                          loadProjects();
                         } catch (e) {
                           alert('Failed to update project: ' + e.message);
                         }
-                      }} style={{ flex: 1, padding: '10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>💾 Update Current</button>
-                    ) : (
-                      <button onClick={() => setIsEditing(true)} style={{ flex: 1, padding: '10px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Edit</button>
-                    )}
-                    <button onClick={async () => {
-                      if (window.confirm('Are you sure you want to delete this feature?')) {
-                        try {
-                          await deleteProject(selectedProject.id);
-                          setSelectedProject(null);
-                          loadProjects();
-                        } catch (e) {
-                          alert('Failed to delete: ' + e.message);
-                        }
+                      }} 
+                      style={{ flex: 1, padding: '10px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                      💾 Update Current
+                    </button>
+                  ) : (
+                    <button onClick={() => setIsEditing(true)} style={{ flex: 1, padding: '10px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Edit</button>
+                  )}
+                  <button onClick={async () => {
+                    if (window.confirm('Are you sure you want to delete this feature?')) {
+                      try {
+                        await deleteProject(selectedProject.id);
+                        setSelectedProject(null);
+                        loadProjects();
+                      } catch (e) {
+                        alert('Failed to delete: ' + e.message);
                       }
-                    }} style={{ flex: 1, padding: '10px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>🗑️ Delete</button>
+                    }
+                  }} style={{ flex: 1, padding: '10px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>🗑️ Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Preview Overlay */}
+        {previewFile && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 3500,
+            padding: '20px'
+          }}>
+            <div style={{
+              background: 'white',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '650px',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              maxHeight: '90vh'
+            }}>
+              {/* Modal Header */}
+              <div style={{
+                padding: '16px 20px',
+                background: '#1a73e8',
+                color: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <span style={{ fontWeight: '700', fontSize: '14px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80%' }}>
+                  🔍 Preview: {previewFile.name}
+                </span>
+                <button 
+                  onClick={() => setPreviewFile(null)} 
+                  style={{ background: 'none', border: 'none', color: 'white', fontSize: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div style={{ padding: '20px', overflowY: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', flex: 1, minHeight: '350px' }}>
+                {(() => {
+                  const isImg = /\.(jpg|jpeg|png|gif|webp|svg)($|\?)/i.test(previewFile.url);
+                  if (isImg) {
+                    return (
+                      <img 
+                        src={previewFile.url} 
+                        alt={previewFile.name} 
+                        style={{ maxWidth: '100%', maxHeight: '450px', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }} 
+                      />
+                    );
+                  } else {
+                    return (
+                      <iframe 
+                        src={previewFile.url} 
+                        title="PDF Preview"
+                        style={{ width: '100%', height: '480px', border: '1px solid #cbd5e1', borderRadius: '8px', background: 'white' }}
+                      />
+                    );
+                  }
+                })()}
+              </div>
+
+              {/* Modal Footer */}
+              <div style={{ padding: '16px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '10px', background: 'white' }}>
+                <button 
+                  onClick={() => setPreviewFile(null)} 
+                  style={{ padding: '10px 16px', border: '1px solid #cbd5e1', background: 'white', color: '#475569', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                >
+                  Close
+                </button>
+                <a 
+                  href={previewFile.url} 
+                  download={previewFile.name}
+                  style={{ 
+                    padding: '10px 20px', 
+                    background: '#10b981', 
+                    color: 'white', 
+                    borderRadius: '8px', 
+                    cursor: 'pointer', 
+                    fontWeight: 'bold', 
+                    fontSize: '13px', 
+                    textDecoration: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  ⬇️ Download File
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Generate Demand Popup Overlay */}
+        {showGenerateDemandPopup && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 3000,
+            padding: '20px'
+          }}>
+            <div style={{
+              background: 'white',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '400px',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              {/* Header */}
+              <div style={{
+                padding: '16px 20px',
+                background: '#10b981',
+                color: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <span style={{ fontWeight: '850', fontSize: '15px' }}>
+                  🧾 Generate Demand
+                </span>
+                <button 
+                  onClick={() => setShowGenerateDemandPopup(false)} 
+                  style={{ background: 'none', border: 'none', color: 'white', fontSize: '20px', cursor: 'pointer' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body */}
+              <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', background: '#f8fafc' }}>
+                <div style={{ background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Area Name</span>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
+                      {selectedProject.project_name || selectedProject.name || 'N/A'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Area Size</span>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
+                      {selectedProject.plot_area || selectedProject["Plot Area"] || 'N/A'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Yearly Rent</span>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
+                      {(() => {
+                        const plotAreaVal = selectedProject.plot_area || selectedProject["Plot Area"];
+                        if (plotAreaVal) {
+                          const cleanNum = parseFloat(String(plotAreaVal).replace(/[^\d.]/g, ''));
+                          if (!isNaN(cleanNum)) {
+                            return `₹${(cleanNum * 200).toLocaleString('en-IN')}`;
+                          }
+                        }
+                        return selectedProject.yearly_rent || selectedProject["Yearly Rent"] || 'N/A';
+                      })()}
+                    </span>
                   </div>
                 </div>
-              )}
+              </div>
+
+              {/* Footer */}
+              <div style={{ padding: '16px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '10px', background: 'white' }}>
+                <button 
+                  onClick={() => setShowGenerateDemandPopup(false)}
+                  style={{ flex: 1, padding: '10px', border: '1px solid #cbd5e1', background: 'white', color: '#475569', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                >
+                  Cancel
+                </button>
+                 <button 
+                  onClick={() => {
+                    setTenantName(selectedProject["Tenant Name"] || selectedProject.tenant_name || '');
+                    setTenantProfession(selectedProject["Profession"] || selectedProject.profession || '');
+                    setTenantPurposeOfUse(selectedProject["Purpose of Use"] || selectedProject.purpose_of_use || '');
+                    setTenantContactInfo(selectedProject["Contact Information"] || selectedProject.contact_information || '');
+                    setTenantRentalPeriod(selectedProject["Rental Period"] || selectedProject.rental_period || '');
+                    setTenantAadharNo(selectedProject["Aadhar Number"] || selectedProject.aadhar_number || selectedProject.aadhar_no || '');
+                    setTenantGstNo(selectedProject["GST Number"] || selectedProject.gst_number || selectedProject.gst_no || '');
+                    setTenantPanCardNo(selectedProject["PAN Card Number"] || selectedProject.pan_card_number || selectedProject.pancard_no || '');
+                    setTenantRentAmount(selectedProject["Rent Amount"] || selectedProject.rent_amount || '');
+                    setTenantRenewalDate(selectedProject["Renewal Date"] || selectedProject.renewal_date || '');
+                    
+                    let atts = [];
+                    if (selectedProject["Tenant Attachments"] || selectedProject.tenant_attachments) {
+                      const raw = selectedProject["Tenant Attachments"] || selectedProject.tenant_attachments;
+                      if (Array.isArray(raw)) {
+                        atts = raw;
+                      } else if (typeof raw === 'string') {
+                        try {
+                          atts = JSON.parse(raw);
+                        } catch(e) {
+                          atts = [];
+                        }
+                      }
+                    }
+                    setTenantAttachments(atts);
+
+                    setShowGenerateDemandPopup(false);
+                    setShowTenantRegistrationPopup(true);
+                  }}
+                  style={{ flex: 1.5, padding: '10px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                >
+                  👤 Tenant Registration
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* New Tenant Registration Popup Overlay */}
+        {showTenantRegistrationPopup && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 3100,
+            padding: '20px'
+          }}>
+            <div style={{
+              background: 'white',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '500px',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              {/* Header */}
+              <div style={{
+                padding: '16px 20px',
+                background: '#0284c7',
+                color: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <span style={{ fontWeight: '850', fontSize: '15px' }}>
+                  👤 New Tenant Registration
+                </span>
+                <button 
+                  onClick={() => {
+                    setShowTenantRegistrationPopup(false);
+                    setTenantName('');
+                    setTenantProfession('');
+                    setTenantPurposeOfUse('');
+                    setTenantContactInfo('');
+                    setTenantRentalPeriod('');
+                    setTenantAadharNo('');
+                    setTenantGstNo('');
+                    setTenantPanCardNo('');
+                    setTenantRentAmount('');
+                    setTenantRenewalDate('');
+                    setTenantAttachments([]);
+                  }} 
+                  style={{ background: 'none', border: 'none', color: 'white', fontSize: '20px', cursor: 'pointer' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body */}
+              <div style={{ 
+                padding: '20px', 
+                display: 'flex', 
+                flexDirection: 'column', 
+                gap: '14px', 
+                background: '#f8fafc',
+                maxHeight: '65vh',
+                overflowY: 'auto'
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Tenant Name</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter Tenant Name"
+                    value={tenantName}
+                    onChange={(e) => setTenantName(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Profession</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter Profession"
+                    value={tenantProfession}
+                    onChange={(e) => setTenantProfession(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Purpose of Use</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter Purpose of Use"
+                    value={tenantPurposeOfUse}
+                    onChange={(e) => setTenantPurposeOfUse(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Contact Information</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter Contact Info (Email / Phone)"
+                    value={tenantContactInfo}
+                    onChange={(e) => setTenantContactInfo(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Rental Period</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. 1 Year, 3 Years"
+                    value={tenantRentalPeriod}
+                    onChange={(e) => setTenantRentalPeriod(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Aadhar Number</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter 12-digit Aadhar Number"
+                    value={tenantAadharNo}
+                    onChange={(e) => setTenantAadharNo(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>GST Number</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter GST Number"
+                    value={tenantGstNo}
+                    onChange={(e) => setTenantGstNo(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>PAN Card Number</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter PAN Card Number"
+                    value={tenantPanCardNo}
+                    onChange={(e) => setTenantPanCardNo(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Rent Amount</label>
+                  <input 
+                    type="text" 
+                    placeholder="Enter Rent Amount"
+                    value={tenantRentAmount}
+                    onChange={(e) => setTenantRentAmount(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Renewal Date</label>
+                  <input 
+                    type="date" 
+                    value={tenantRenewalDate}
+                    onChange={(e) => setTenantRenewalDate(e.target.value)}
+                    style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Tenant Attachments (Images/PDFs)</label>
+                  
+                  {tenantAttachments && tenantAttachments.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', background: '#f1f5f9', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                      {tenantAttachments.map((att, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: '#334155' }}>
+                          <a href={att.url} target="_blank" rel="noreferrer" style={{ color: '#0284c7', textDecoration: 'none', fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '380px' }}>
+                            📎 {att.name || att.url.split('/').pop()}
+                          </a>
+                          <button 
+                            type="button"
+                            onClick={() => handleRemoveTenantAttachment(att.url)}
+                            style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <label style={{
+                      flex: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '6px',
+                      padding: '10px',
+                      borderRadius: '8px',
+                      border: '1px dashed #0284c7',
+                      background: '#f0f9ff',
+                      color: '#0284c7',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      cursor: isUploadingTenantFile ? 'not-allowed' : 'pointer'
+                    }}>
+                      <input 
+                        type="file" 
+                        multiple 
+                        accept="image/*,application/pdf"
+                        onChange={handleTenantAttachmentUpload}
+                        disabled={isUploadingTenantFile}
+                        style={{ display: 'none' }}
+                      />
+                      {isUploadingTenantFile ? 'Uploading...' : '📁 Choose Files'}
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ padding: '16px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '10px', background: 'white' }}>
+                <button 
+                  onClick={() => {
+                    setShowTenantRegistrationPopup(false);
+                    setTenantName('');
+                    setTenantProfession('');
+                    setTenantPurposeOfUse('');
+                    setTenantContactInfo('');
+                    setTenantRentalPeriod('');
+                    setTenantAadharNo('');
+                    setTenantGstNo('');
+                    setTenantPanCardNo('');
+                    setTenantRentAmount('');
+                    setTenantRenewalDate('');
+                    setTenantAttachments([]);
+                  }}
+                  style={{ flex: 1, padding: '10px', border: '1px solid #cbd5e1', background: 'white', color: '#475569', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={async () => {
+                    try {
+                      const newAttrs = { ...selectedProject };
+                      const customAttrs = {};
+                      Object.keys(newAttrs).forEach(k => {
+                        if (!STANDARD_KEYS.includes(k)) {
+                          customAttrs[k] = newAttrs[k];
+                        }
+                      });
+                      customAttrs["Tenant Name"] = tenantName;
+                      customAttrs["Profession"] = tenantProfession;
+                      customAttrs["Purpose of Use"] = tenantPurposeOfUse;
+                      customAttrs["Contact Information"] = tenantContactInfo;
+                      customAttrs["Rental Period"] = tenantRentalPeriod;
+                      customAttrs["Aadhar Number"] = tenantAadharNo;
+                      customAttrs["GST Number"] = tenantGstNo;
+                      customAttrs["PAN Card Number"] = tenantPanCardNo;
+                      customAttrs["Rent Amount"] = tenantRentAmount;
+                      customAttrs["Renewal Date"] = tenantRenewalDate;
+                      customAttrs["Tenant Attachments"] = tenantAttachments;
+                      
+                      const res = await updateCustomAttributes(selectedProject.id, customAttrs);
+                      alert("Tenant registered successfully!");
+                      setShowTenantRegistrationPopup(false);
+                      setTenantName('');
+                      setTenantProfession('');
+                      setTenantPurposeOfUse('');
+                      setTenantContactInfo('');
+                      setTenantRentalPeriod('');
+                      setTenantAadharNo('');
+                      setTenantGstNo('');
+                      setTenantPanCardNo('');
+                      setTenantRentAmount('');
+                      setTenantRenewalDate('');
+                      setTenantAttachments([]);
+                      
+                      if (res && res.id) {
+                        setSelectedProject(prev => ({
+                          ...prev,
+                          ...customAttrs,
+                          id: res.id
+                        }));
+                      } else {
+                        setSelectedProject(prev => ({
+                          ...prev,
+                          ...customAttrs
+                        }));
+                      }
+                      loadProjects();
+                    } catch (e) {
+                      alert("Failed to save: " + e.message);
+                    }
+                  }}
+                  style={{ flex: 1, padding: '10px', background: '#0284c7', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                >
+                  Register
+                </button>
+              </div>
             </div>
           </div>
         )}
