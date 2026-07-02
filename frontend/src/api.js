@@ -136,7 +136,8 @@ export async function searchExternalLocations(query) {
   }
 }
 
-export function manualUpload(file, onProgress) {
+export async function manualUpload(file, onProgress) {
+  await ensureCsrfToken();
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
@@ -219,9 +220,10 @@ export async function submitWorkOrder(projectId, comment, file, approver, descri
     formData.append('tentative_start_date', tentativeStartDate)
   }
 
+  await ensureCsrfToken()
   const res = await fetch(`${API}.submit_work_order`, {
     method: 'POST',
-    headers: { 'X-Frappe-CSRF-Token': 'fetch' },
+    headers: { 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' },
     credentials: 'include',
     body: formData,
   })
@@ -253,9 +255,10 @@ export async function addTimelineEntry(projectId, status, date, comment, files =
     formData.append('file', files)
   }
 
+  await ensureCsrfToken()
   const res = await fetch(`${API}.add_timeline_entry`, {
     method: 'POST',
-    headers: { 'X-Frappe-CSRF-Token': 'fetch' },
+    headers: { 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' },
     credentials: 'include',
     body: formData,
   })
