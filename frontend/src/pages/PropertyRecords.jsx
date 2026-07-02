@@ -1113,17 +1113,7 @@ function RecordsPage({ userInfo, onView, setSubPage }) {
           {/* Charts row */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             {/* Geo Distribution */}
-            <div style={{ background: 'white', borderRadius: '14px', border: '1px solid #e2e8f0', padding: '18px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a', marginBottom: '14px' }}>Property Geo Distribution</div>
-              <div style={{ height: '220px', background: '#e0f2fe', borderRadius: '10px', position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ position: 'absolute', top: '10px', left: '10px', fontSize: '11px', fontWeight: 700, color: '#0369a1' }}>VVCMC Property Map</div>
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', padding: '20px' }}>
-                  {[1,2,3,4,5,6,7].map(i => (
-                    <div key={i} style={{ width: '60px', height: '40px', background: i%2===0?'#bae6fd':'#fde68a', borderRadius: '6px', opacity: 0.8 }} />
-                  ))}
-                </div>
-              </div>
-            </div>
+            <GeoDistributionMap records={surveys} />
 
             {/* Demand vs Collection */}
             <div style={{ background: 'white', borderRadius: '14px', border: '1px solid #e2e8f0', padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column' }}>
