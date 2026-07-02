@@ -952,14 +952,17 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
             selectedProject.type === 'Road'
           );
           const meta = layerMetaLookup[selectedProject.type] || LAYER_META[selectedProject.type] || {};
-          let color;
-          if (isReferenceLayer) {
+          const isProjectOrReservation = !isReferenceLayer || selectedProject.type === 'MBMC-RESERVSTION' || selectedProject.type === 'MBMC-RESERVSTION-BOUNDARY';
+          if (isReferenceLayer && selectedProject.type !== 'MBMC-RESERVSTION' && selectedProject.type !== 'MBMC-RESERVSTION-BOUNDARY') {
             color = meta.color || '#1a73e8';
           } else {
             const st = selectedProject.status || '';
             if (['Approved','Work Started','Ongoing','On Hold','Hold','Near Completion','Completed'].includes(st)) color = '#16a34a';
-            else if (st === 'Pending for Request') color = '#f97316';
-            else if (st === 'Submitted') color = '#eab308';
+            else if (st === 'Pending for Request') color = '#ea580c';
+            else if (st === 'Submitted') color = '#2563eb';
+            else if (st === 'Correction') color = '#e11d48';
+            else if (st === 'Draft') color = '#64748b';
+            else if (st === 'Rejected') color = '#dc2626';
             else color = selectedProject.color || meta.color || '#1a73e8';
           }
           const fillOpacity = meta.fillOpacity !== undefined ? meta.fillOpacity : 0.45;
@@ -1639,7 +1642,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
 
   useEffect(() => {
     if (liveFilterActive !== undefined) {
-      const liveStatuses = 'Pending for Request,Approved,Submitted,Work Started,Ongoing,On Hold,Hold,Near Completion,Completed';
+      const liveStatuses = 'Approved,Work Started,Ongoing,On Hold,Hold,Near Completion,Completed';
       const newFilter = liveFilterActive ? liveStatuses : null;
       setActiveStatusFilter(newFilter);
       loadProjects(newFilter);
@@ -2017,20 +2020,26 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         p.type === 'Road'
       );
 
-      // For reference layers use meta color; for user-drawn features use status-based color
-      let color = isReferenceLayers ? defaultColor : (p.color || defaultColor)
+      // For reference layers (except reservations) use meta color; for user-drawn projects / reservations use status-based color
+      const isProjectOrReservation = !isReferenceLayers || p.type === 'MBMC-RESERVSTION' || p.type === 'MBMC-RESERVSTION-BOUNDARY';
+      let color = (isReferenceLayers && p.type !== 'MBMC-RESERVSTION' && p.type !== 'MBMC-RESERVSTION-BOUNDARY') ? defaultColor : (p.color || defaultColor)
       let fillOpacity = metaFillOpacity
 
-      if (!isReferenceLayers) {
-        // Status-based color overrides only for user-drawn project features
+      if (isProjectOrReservation && p.status) {
         if (['Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion', 'Completed'].includes(p.status)) {
-          color = '#16a34a'
+          color = '#16a34a' // Green
         } else if (p.status === 'Pending for Request') {
-          color = '#f97316'
+          color = '#ea580c' // Orange
         } else if (p.status === 'Submitted') {
-          color = '#2563eb'
+          color = '#2563eb' // Blue
+        } else if (p.status === 'Correction') {
+          color = '#e11d48' // Rose/Red
+        } else if (p.status === 'Draft') {
+          color = '#64748b' // Slate/Gray
+        } else if (p.status === 'Rejected') {
+          color = '#dc2626' // Red
         }
-        fillOpacity = 0.4
+        fillOpacity = 0.45
       }
       let layer;
       if (!p.coordinates || p.coordinates.length === 0) return;
@@ -2585,17 +2594,21 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                 );
                 
                 let color = '#1a73e8';
-                if (isReferenceLayer) {
+                const isProjectOrReservation = !isReferenceLayer || selectedProject.type === 'MBMC-RESERVSTION' || selectedProject.type === 'MBMC-RESERVSTION-BOUNDARY';
+                if (isReferenceLayer && selectedProject.type !== 'MBMC-RESERVSTION' && selectedProject.type !== 'MBMC-RESERVSTION-BOUNDARY') {
                   if (selectedProject.type === 'MBMC-VILLAGE-BOUNDARY') color = '#a855f7';
                   else if (selectedProject.type === 'MBMC-VILLAGES-SURVEY_No._BOUNDARY') color = '#64748b';
-                  else if (selectedProject.type?.startsWith('MBMC-RESERVSTION')) color = '#06b6d4';
                   else if (selectedProject.type === 'MBMC-ROAD') color = '#f59e0b';
                   else if (selectedProject.type === 'MBMC-ROAD_CENTER_LINE') color = '#d97706';
                 } else {
                   const st = selectedProject.status || '';
                   if (['Approved','Work Started','Ongoing','On Hold','Hold','Near Completion','Completed'].includes(st)) color = '#16a34a';
-                  else if (st === 'Pending for Request') color = '#f97316';
-                  else if (st === 'Submitted') color = '#eab308';
+                  else if (st === 'Pending for Request') color = '#ea580c';
+                  else if (st === 'Submitted') color = '#2563eb';
+                  else if (st === 'Correction') color = '#e11d48';
+                  else if (st === 'Draft') color = '#64748b';
+                  else if (st === 'Rejected') color = '#dc2626';
+                  else if (selectedProject.type?.startsWith('MBMC-RESERVSTION')) color = '#06b6d4';
                 }
 
                 const geomType = selectedProject.geom_type || 'Polygon';
