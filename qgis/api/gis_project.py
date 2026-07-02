@@ -1376,7 +1376,7 @@ def submit_work_order():
             raise e
     
     # Handle file upload if present
-    if 'file' in frappe.request.files:
+    if frappe.request and hasattr(frappe.request, 'files') and 'file' in frappe.request.files:
         from frappe.utils.file_manager import save_file
         uploaded_file = frappe.request.files['file']
         file_content = uploaded_file.read()
