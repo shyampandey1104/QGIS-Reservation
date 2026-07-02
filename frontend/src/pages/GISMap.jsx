@@ -952,8 +952,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
             selectedProject.type === 'Road'
           );
           const meta = layerMetaLookup[selectedProject.type] || LAYER_META[selectedProject.type] || {};
-          const isProjectOrReservation = !isReferenceLayer || selectedProject.type === 'MBMC-RESERVSTION' || selectedProject.type === 'MBMC-RESERVSTION-BOUNDARY';
-          if (isReferenceLayer && selectedProject.type !== 'MBMC-RESERVSTION' && selectedProject.type !== 'MBMC-RESERVSTION-BOUNDARY') {
+          const isProjectOrReservation = !isReferenceLayer || selectedProject.type === 'MBMC-RESERVSTION';
+          if (isReferenceLayer && selectedProject.type !== 'MBMC-RESERVSTION') {
             color = meta.color || '#1a73e8';
           } else {
             const st = selectedProject.status || '';
@@ -2021,8 +2021,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
       );
 
       // For reference layers (except reservations) use meta color; for user-drawn projects / reservations use status-based color
-      const isProjectOrReservation = !isReferenceLayers || p.type === 'MBMC-RESERVSTION' || p.type === 'MBMC-RESERVSTION-BOUNDARY';
-      let color = (isReferenceLayers && p.type !== 'MBMC-RESERVSTION' && p.type !== 'MBMC-RESERVSTION-BOUNDARY') ? defaultColor : (p.color || defaultColor)
+      const isProjectOrReservation = !isReferenceLayers || p.type === 'MBMC-RESERVSTION';
+      let color = (isReferenceLayers && p.type !== 'MBMC-RESERVSTION') ? defaultColor : (p.color || defaultColor)
       let fillOpacity = metaFillOpacity
 
       if (isProjectOrReservation && p.status) {
@@ -2594,8 +2594,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                 );
                 
                 let color = '#1a73e8';
-                const isProjectOrReservation = !isReferenceLayer || selectedProject.type === 'MBMC-RESERVSTION' || selectedProject.type === 'MBMC-RESERVSTION-BOUNDARY';
-                if (isReferenceLayer && selectedProject.type !== 'MBMC-RESERVSTION' && selectedProject.type !== 'MBMC-RESERVSTION-BOUNDARY') {
+                const isProjectOrReservation = !isReferenceLayer || selectedProject.type === 'MBMC-RESERVSTION';
+                if (isReferenceLayer && selectedProject.type !== 'MBMC-RESERVSTION') {
                   if (selectedProject.type === 'MBMC-VILLAGE-BOUNDARY') color = '#a855f7';
                   else if (selectedProject.type === 'MBMC-VILLAGES-SURVEY_No._BOUNDARY') color = '#64748b';
                   else if (selectedProject.type === 'MBMC-ROAD') color = '#f59e0b';
