@@ -136,21 +136,52 @@ export async function searchExternalLocations(query) {
   }
 }
 
-export async function manualUpload(file) {
-  const formData = new FormData()
-  formData.append('file', file)
+export function manualUpload(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append('file', file);
 
-  const res = await fetch(`${API}.upload_manual_data`, {
-    method: 'POST',
-    headers: { 'X-Frappe-CSRF-Token': 'fetch' },
-    credentials: 'include',
-    body: formData,
-  })
-  const data = await res.json()
-  if (data.exc) throw new Error(data.exc_type || 'Server error')
-  if (!res.ok) throw new Error(data.message || 'Request failed')
-  // Returns { success, job_id, status, message } — background processing
-  return data.message
+    if (xhr.upload && onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const percentComplete = Math.round((e.loaded / e.total) * 100);
+          onProgress(percentComplete);
+        }
+      });
+    }
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data.exc) {
+            reject(new Error(data.exc_type || 'Server error'));
+          } else {
+            resolve(data.message);
+          }
+        } catch (err) {
+          reject(new Error('Invalid server response'));
+        }
+      } else {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          reject(new Error(data.message || `Request failed with status ${xhr.status}`));
+        } catch (e) {
+          reject(new Error(`Request failed with status ${xhr.status}`));
+        }
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(new Error('Network error occurred during upload'));
+    });
+
+    xhr.open('POST', `${API}.upload_manual_data`);
+    xhr.setRequestHeader('X-Frappe-CSRF-Token', window.csrf_token || 'fetch');
+    xhr.withCredentials = true;
+    xhr.send(formData);
+  });
 }
 
 export async function pollUploadJob(jobId) {

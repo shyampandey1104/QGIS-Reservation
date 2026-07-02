@@ -2665,15 +2665,17 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
     const file = e.target.files[0]
     if (!file) return
     setUploading(true)
-    setUploadProgress(5)
+    setUploadProgress(1)
 
     try {
-      // Step 1: Upload file — returns immediately with a job_id
-      const res = await manualUpload(file)
+      // Step 1: Upload file with progress tracking
+      const res = await manualUpload(file, (pct) => {
+        // Scale upload progress from 1% to 85% of the visual bar
+        setUploadProgress(Math.max(1, Math.round(pct * 0.85)))
+      })
       const jobId = res && res.job_id
 
       if (!jobId) {
-        // Legacy sync response (small file / fallback)
         setUploadProgress(100)
         setTimeout(() => {
           alert(res.message || 'Upload successful')
@@ -2686,13 +2688,12 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
       }
 
       // Step 2: Poll background job until done
-      setUploadProgress(15)
       let done = false
       while (!done) {
         await new Promise(r => setTimeout(r, 2500)) // poll every 2.5s
         const status = await pollUploadJob(jobId)
-        const pct = status.status === 'queued' ? 20
-          : status.status === 'processing' ? Math.min(85, 20 + (status.saved_count || 0) / 10)
+        const pct = status.status === 'queued' ? 90
+          : status.status === 'processing' ? Math.min(98, 90 + (status.saved_count || 0) / 100)
           : status.status === 'done' ? 100
           : 100
         setUploadProgress(pct)
