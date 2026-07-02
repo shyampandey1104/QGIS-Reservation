@@ -1,0 +1,533 @@
+{
+ "actions": [],
+ "autoname": "GIS-PROJ-.#####",
+ "creation": "2026-05-13 14:51:50.359834",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "project_name",
+  "road_name",
+  "ward",
+  "project_type",
+  "status",
+  "submitted_by_role",
+  "col_break_1",
+  "budget",
+  "road_length",
+  "start_date",
+  "completion_date",
+  "section_break_attribs",
+  "road_no",
+  "road_type",
+  "pave_type",
+  "landmark",
+  "col_break_attribs",
+  "authority",
+  "traffic",
+  "width",
+  "shape_length",
+  "unp_name",
+  "unp_type",
+  "section_break_1",
+  "description",
+  "contractor_details",
+  "remarks",
+  "custom_attributes",
+  "timeline",
+  "section_break_2",
+  "geometry",
+  "amended_from",
+  "gs_type",
+  "vv_no",
+  "gis",
+  "ss",
+  "qq",
+  "lllm",
+  "traffic_signals",
+  "dd",
+  "test",
+  "type_of_road",
+  "type",
+  "types",
+  "tested",
+  "test_field_scratch",
+  "pasto_",
+  "pa",
+  "data",
+  "pod",
+  "add",
+  "s",
+  "loster",
+  "or",
+  "guester",
+  "pankaj",
+  "pl",
+  "sk",
+  "kl",
+  "road",
+  "pso",
+  "traffic_signal",
+  "pank",
+  "road_proposal",
+  "wo_comment",
+  "wo_id",
+  "area",
+  "color",
+  "dma_no",
+  "ward_no",
+  "junc_name",
+  "facility",
+  "rail_route",
+  "bridg_type",
+  "fly_name"
+ ],
+ "fields": [
+  {
+   "fieldname": "project_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Project Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "road_name",
+   "fieldtype": "Small Text",
+   "label": "Road Name"
+  },
+  {
+   "fieldname": "ward",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Ward / Zone",
+   "reqd": 1
+  },
+  {
+   "fieldname": "project_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Project Type"
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "Pending for Request",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nSubmitted\nApproved\nRejected\nPending for Request\nCorrection\nWork Started\nOngoing\nHold\nNear Completion\nCompleted"
+  },
+  {
+   "fieldname": "submitted_by_role",
+   "fieldtype": "Data",
+   "label": "Submitted By Role",
+   "read_only": 1
+  },
+  {
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "budget",
+   "fieldtype": "Data",
+   "label": "Estimated Budget (INR)"
+  },
+  {
+   "fieldname": "road_length",
+   "fieldtype": "Data",
+   "label": "Road Length / Area"
+  },
+  {
+   "fieldname": "start_date",
+   "fieldtype": "Date",
+   "label": "Start Date"
+  },
+  {
+   "fieldname": "completion_date",
+   "fieldtype": "Date",
+   "label": "Expected Completion Date"
+  },
+  {
+   "fieldname": "section_break_attribs",
+   "fieldtype": "Section Break",
+   "label": "GIS Attributes"
+  },
+  {
+   "fieldname": "road_no",
+   "fieldtype": "Data",
+   "label": "Road No"
+  },
+  {
+   "fieldname": "road_type",
+   "fieldtype": "Data",
+   "label": "Road Type"
+  },
+  {
+   "fieldname": "pave_type",
+   "fieldtype": "Data",
+   "label": "Pave Type"
+  },
+  {
+   "fieldname": "landmark",
+   "fieldtype": "Small Text",
+   "label": "Landmark"
+  },
+  {
+   "fieldname": "col_break_attribs",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "authority",
+   "fieldtype": "Data",
+   "label": "Authority"
+  },
+  {
+   "fieldname": "traffic",
+   "fieldtype": "Data",
+   "label": "Traffic"
+  },
+  {
+   "fieldname": "width",
+   "fieldtype": "Data",
+   "label": "Width"
+  },
+  {
+   "fieldname": "shape_length",
+   "fieldtype": "Data",
+   "label": "SHAPE Length"
+  },
+  {
+   "fieldname": "unp_name",
+   "fieldtype": "Small Text",
+   "label": "UNP Name"
+  },
+  {
+   "fieldname": "unp_type",
+   "fieldtype": "Data",
+   "label": "UNP Type"
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "contractor_details",
+   "fieldtype": "Text",
+   "label": "Contractor Details"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Text",
+   "label": "Remarks"
+  },
+  {
+   "fieldname": "custom_attributes",
+   "fieldtype": "Code",
+   "label": "Custom Attributes",
+   "options": "JSON"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "timeline",
+   "fieldtype": "Code",
+   "label": "Project Timeline Logs",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break",
+   "label": "Geometry"
+  },
+  {
+   "fieldname": "geometry",
+   "fieldtype": "Long Text",
+   "label": "Polygon Geometry (GeoJSON)"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "GIS Project",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "gs_type",
+   "fieldtype": "Data",
+   "label": "GS TYpe"
+  },
+  {
+   "fieldname": "vv_no",
+   "fieldtype": "Data",
+   "label": "VV NO"
+  },
+  {
+   "fieldname": "gis",
+   "fieldtype": "Data",
+   "label": "GIS"
+  },
+  {
+   "fieldname": "ss",
+   "fieldtype": "Data",
+   "label": "SS"
+  },
+  {
+   "fieldname": "qq",
+   "fieldtype": "Data",
+   "label": "qq"
+  },
+  {
+   "fieldname": "lllm",
+   "fieldtype": "Data",
+   "label": "LLLM"
+  },
+  {
+   "fieldname": "traffic_signals",
+   "fieldtype": "Data",
+   "label": "Traffic Signals"
+  },
+  {
+   "fieldname": "dd",
+   "fieldtype": "Data",
+   "label": "dd"
+  },
+  {
+   "fieldname": "test",
+   "fieldtype": "Data",
+   "label": "Test"
+  },
+  {
+   "fieldname": "type_of_road",
+   "fieldtype": "Data",
+   "label": "type of road"
+  },
+  {
+   "fieldname": "type",
+   "fieldtype": "Data",
+   "label": "type"
+  },
+  {
+   "fieldname": "types",
+   "fieldtype": "Data",
+   "label": "Types"
+  },
+  {
+   "fieldname": "tested",
+   "fieldtype": "Data",
+   "label": "Tested"
+  },
+  {
+   "fieldname": "test_field_scratch",
+   "fieldtype": "Data",
+   "label": "Test Field Scratch"
+  },
+  {
+   "fieldname": "pasto_",
+   "fieldtype": "Data",
+   "label": "Pasto "
+  },
+  {
+   "fieldname": "pa",
+   "fieldtype": "Data",
+   "label": "pa"
+  },
+  {
+   "fieldname": "data",
+   "fieldtype": "Data",
+   "label": "Data"
+  },
+  {
+   "fieldname": "pod",
+   "fieldtype": "Data",
+   "label": "Pod"
+  },
+  {
+   "fieldname": "add",
+   "fieldtype": "Data",
+   "label": "Add"
+  },
+  {
+   "fieldname": "s",
+   "fieldtype": "Data",
+   "label": "s"
+  },
+  {
+   "fieldname": "loster",
+   "fieldtype": "Data",
+   "label": "Loster"
+  },
+  {
+   "fieldname": "or",
+   "fieldtype": "Data",
+   "label": "or"
+  },
+  {
+   "fieldname": "guester",
+   "fieldtype": "Data",
+   "label": "guester"
+  },
+  {
+   "fieldname": "pankaj",
+   "fieldtype": "Data",
+   "label": "pankaj"
+  },
+  {
+   "fieldname": "pl",
+   "fieldtype": "Data",
+   "label": "pl"
+  },
+  {
+   "fieldname": "sk",
+   "fieldtype": "Data",
+   "label": "sk"
+  },
+  {
+   "fieldname": "kl",
+   "fieldtype": "Data",
+   "label": "kl"
+  },
+  {
+   "fieldname": "road",
+   "fieldtype": "Data",
+   "label": "Road"
+  },
+  {
+   "fieldname": "pso",
+   "fieldtype": "Data",
+   "label": "Pso"
+  },
+  {
+   "fieldname": "traffic_signal",
+   "fieldtype": "Data",
+   "label": "Traffic Signal"
+  },
+  {
+   "fieldname": "pank",
+   "fieldtype": "Data",
+   "label": "Pank"
+  },
+  {
+   "fieldname": "road_proposal",
+   "fieldtype": "Data",
+   "label": "Road Proposal"
+  },
+  {
+   "fieldname": "wo_comment",
+   "fieldtype": "Data",
+   "label": "wo_comment"
+  },
+  {
+   "fieldname": "wo_id",
+   "fieldtype": "Data",
+   "label": "wo_id"
+  },
+  {
+   "fieldname": "area",
+   "fieldtype": "Data",
+   "label": "Area"
+  },
+  {
+   "fieldname": "color",
+   "fieldtype": "Data",
+   "label": "color"
+  },
+  {
+   "fieldname": "dma_no",
+   "fieldtype": "Data",
+   "label": "dma_no"
+  },
+  {
+   "fieldname": "ward_no",
+   "fieldtype": "Data",
+   "label": "ward_no"
+  },
+  {
+   "fieldname": "junc_name",
+   "fieldtype": "Data",
+   "label": "junc_name"
+  },
+  {
+   "fieldname": "facility",
+   "fieldtype": "Data",
+   "label": "facility"
+  },
+  {
+   "fieldname": "rail_route",
+   "fieldtype": "Data",
+   "label": "rail_route"
+  },
+  {
+   "fieldname": "bridg_type",
+   "fieldtype": "Data",
+   "label": "bridg_type"
+  },
+  {
+   "fieldname": "fly_name",
+   "fieldtype": "Data",
+   "label": "fly_name"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-05-19 14:04:11.281301",
+ "modified_by": "Administrator",
+ "module": "QGIS",
+ "name": "GIS Project",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "GIS Junior Engineer",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "GIS Assistant Engineer",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "GIS Senior Engineer",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "GIS Department Head",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Guest"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
