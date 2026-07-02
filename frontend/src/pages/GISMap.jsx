@@ -1358,6 +1358,19 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
   };
 
   const isLayerVisible = (type) => {
+    if (liveFilterActive) {
+      const isRef = type && (
+        type.startsWith('MBMC-') ||
+        type.startsWith('VVCM') ||
+        type === 'BUILDING_INFO' ||
+        type === 'building_info' ||
+        type === 'Road'
+      );
+      if (isRef && type !== 'MBMC-RESERVSTION') {
+        return false;
+      }
+      return layerVisibility[type] !== false;
+    }
     // Return explicit visibility flag; default to false if not set
     return !!layerVisibility[type];
   };
@@ -1585,9 +1598,22 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
     if (requestTrigger > 0) setShowForm(true)
   }, [requestTrigger])
 
-  const dynamicProjectTypes = useMemo(() => {
-    return Array.from(new Set(projects.map(p => p.type).filter(Boolean))).sort()
-  }, [projects])
+  const visibleProjectTypes = useMemo(() => {
+    let types = Array.from(new Set(projects.map(p => p.type).filter(Boolean))).sort();
+    if (liveFilterActive) {
+      types = types.filter(t => {
+        const isRef = t && (
+          t.startsWith('MBMC-') ||
+          t.startsWith('VVCM') ||
+          t === 'BUILDING_INFO' ||
+          t === 'building_info' ||
+          t === 'Road'
+        );
+        return !isRef || t === 'MBMC-RESERVSTION';
+      });
+    }
+    return types;
+  }, [projects, liveFilterActive])
 
   const loadProjects = async (overrideStatus) => {
     const statusToFetch = overrideStatus !== undefined ? overrideStatus : activeStatusFilter;
@@ -2020,6 +2046,18 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         p.type === 'building_info' ||
         p.type === 'Road'
       );
+
+      if (liveFilterActive) {
+        // Skip all reference layers except reservation
+        if (isReferenceLayers && p.type !== 'MBMC-RESERVSTION') {
+          return;
+        }
+        // Only show green status projects/reservations
+        const isGreenStatus = p.status && ['Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion', 'Completed'].includes(p.status);
+        if (!isGreenStatus) {
+          return;
+        }
+      }
 
       // For reference layers (except reservations) use meta color; for user-drawn projects / reservations use status-based color
       const isProjectOrReservation = !isReferenceLayers || p.type === 'MBMC-RESERVSTION';
@@ -3067,26 +3105,26 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                     <button onClick={handleFitAll} style={{ flex: 1, padding: '6px 8px', background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: '8px', color: '#1a73e8', fontSize: '11px', cursor: 'pointer', fontWeight: '700', transition: 'all 0.2s' }}>🔍 Fit All</button>
                     <button onClick={() => {
                       const allOn = {};
-                      dynamicProjectTypes.forEach(t => { allOn[t] = true; });
+                      visibleProjectTypes.forEach(t => { allOn[t] = true; });
                       setLayerVisibility(allOn);
                     }} style={{ flex: 1, padding: '6px 8px', background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: '8px', color: '#16a34a', fontSize: '11px', cursor: 'pointer', fontWeight: '700', transition: 'all 0.2s' }}>✅ All On</button>
                     <button onClick={() => {
                       const allOff = {};
-                      dynamicProjectTypes.forEach(t => { allOff[t] = false; });
+                      visibleProjectTypes.forEach(t => { allOff[t] = false; });
                       setLayerVisibility(allOff);
                     }} style={{ flex: 1, padding: '6px 8px', background: '#fef2f2', border: '1.5px solid #fecaca', borderRadius: '8px', color: '#dc2626', fontSize: '11px', cursor: 'pointer', fontWeight: '700', transition: 'all 0.2s' }}>❌ All Off</button>
                     <button onClick={() => {
                       localStorage.removeItem('gis_layer_vis');
                       const DEFAULT_ON = new Set(['MBMC-VILLAGE-BOUNDARY','MBMC-RESERVSTION-BOUNDARY','MBMC-RESERVSTION','MBMC-ROAD_CENTER_LINE','MBMC-ROAD','MBMC-VILLAGES-SURVEY_No._BOUNDARY','VVCM_BOUNDARY','VVCM-ALL-ROAD','VVCM_VILLAGE BOUNDARY','Road']);
                       const reset = {};
-                      dynamicProjectTypes.forEach(t => { reset[t] = DEFAULT_ON.has(t); });
+                      visibleProjectTypes.forEach(t => { reset[t] = DEFAULT_ON.has(t); });
                       setLayerVisibility(reset);
                     }} style={{ flex: 1, padding: '6px 8px', background: '#f5f5f5', border: '1.5px solid #e5e5e5', borderRadius: '8px', color: '#666', fontSize: '11px', cursor: 'pointer', fontWeight: '700', transition: 'all 0.2s' }}>🔄 Reset</button>
                   </div>
 
                   {/* Layers List */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {dynamicProjectTypes.map(type => {
+                    {visibleProjectTypes.map(type => {
                       const count = projectCounts[type] || 0;
                       const meta = layerMetaLookup[type] || LAYER_META[type] || { color: '#ccc' };
                       const displayLabel = type.replace(/_/g, ' ').replace(/-/g, ' - ');
