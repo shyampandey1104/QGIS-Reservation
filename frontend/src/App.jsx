@@ -377,11 +377,7 @@ export default function App() {
               <span>Role:</span>
               <strong style={{
                 color: 'white',
-                background: userInfo?.role === 'Muncipal Commissioner' ? '#15803d'
-                          : userInfo?.role === 'System Manager' ? '#1d4ed8'
-                          : userInfo?.role === 'Executive Engineer' ? '#c2410c'
-                          : userInfo?.role === 'City Engineer' ? '#7c3aed'
-                          : '#374151',
+                background: userInfo?.role === 'Muncipal Commissioner' ? '#15803d' : '#ea580c',
                 padding: '4px 10px',
                 borderRadius: '6px',
                 border: 'none',
