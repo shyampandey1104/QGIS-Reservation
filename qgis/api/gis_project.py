@@ -1255,9 +1255,22 @@ def update_custom_attributes(project_id, custom_attributes):
                 val_to_set = json.dumps(value) if isinstance(value, (list, dict)) else value
                 original_doc.set(fieldname, val_to_set)
             original_doc.custom_attributes = json.dumps(existing_custom_attrs)
-            original_doc.save(ignore_permissions=True)
+            
+            import time
+            for attempt in range(5):
+                try:
+                    original_doc.save(ignore_permissions=True)
+                    frappe.db.commit()
+                    break
+                except Exception as e:
+                    if hasattr(e, 'args') and len(e.args) > 0 and e.args[0] == 1412:
+                        time.sleep(0.5)
+                        frappe.db.rollback()
+                        original_doc.reload()
+                        continue
+                    raise e
+                    
             frappe.cache().delete_keys("gis_projects_cache_")
-            frappe.db.commit()
             return {"id": project_id, "updated": True}
             
         # Create a new record (duplicate) as requested
@@ -1273,10 +1286,21 @@ def update_custom_attributes(project_id, custom_attributes):
             new_doc.set(fieldname, val_to_set)
             
         new_doc.custom_attributes = json.dumps(existing_custom_attrs)
-        new_doc.insert(ignore_permissions=True, ignore_mandatory=True)
-        frappe.cache().delete_keys("gis_projects_cache_")
-        frappe.db.commit()
         
+        import time
+        for attempt in range(5):
+            try:
+                new_doc.insert(ignore_permissions=True, ignore_mandatory=True)
+                frappe.db.commit()
+                break
+            except Exception as e:
+                if hasattr(e, 'args') and len(e.args) > 0 and e.args[0] == 1412:
+                    time.sleep(0.5)
+                    frappe.db.rollback()
+                    continue
+                raise e
+                
+        frappe.cache().delete_keys("gis_projects_cache_")
         return {"id": new_doc.name, "updated": True}
     return {"id": project_id, "updated": False}
 
@@ -1332,8 +1356,24 @@ def submit_work_order():
         "gis_project": project_id,
         "comment": full_comment,
         "approver": approver,
+        "description": description,
+        "estimated_cost": estimated_cost,
+        "estimated_duration": estimated_duration,
+        "tentative_start_date": tentative_start_date,
     })
-    doc.insert(ignore_permissions=True)
+    
+    import time
+    for attempt in range(5):
+        try:
+            doc.insert(ignore_permissions=True)
+            frappe.db.commit()
+            break
+        except Exception as e:
+            if hasattr(e, 'args') and len(e.args) > 0 and e.args[0] == 1412:
+                time.sleep(0.5)
+                frappe.db.rollback()
+                continue
+            raise e
     
     # Handle file upload if present
     if 'file' in frappe.request.files:
@@ -1356,34 +1396,43 @@ def submit_work_order():
 
     # Update the linked GIS Project's status, color, and proposal metadata fields
     if project_id:
-        proj_doc = frappe.get_doc("GIS Project", project_id)
-        proj_doc.status = "Pending for Request"
-        proj_doc.color = "#ea580c"
-        
-        if description:
-            proj_doc.description = description
-        if estimated_cost:
-            proj_doc.budget = estimated_cost
-        if tentative_start_date:
-            proj_doc.start_date = tentative_start_date
-            
-        # Update custom_attributes with duration
         import json
-        attrs = {}
-        if proj_doc.custom_attributes:
+        for attempt in range(5):
             try:
-                attrs = json.loads(proj_doc.custom_attributes) or {}
-            except Exception:
-                pass
-        if estimated_duration:
-            attrs['Estimated Duration'] = estimated_duration
-            proj_doc.custom_attributes = json.dumps(attrs)
-            
-        proj_doc.save(ignore_permissions=True)
+                proj_doc = frappe.get_doc("GIS Project", project_id)
+                proj_doc.status = "Pending for Request"
+                proj_doc.color = "#ea580c"
+                
+                if description:
+                    proj_doc.description = description
+                if estimated_cost:
+                    proj_doc.budget = estimated_cost
+                if tentative_start_date:
+                    proj_doc.start_date = tentative_start_date
+                    
+                # Update custom_attributes with duration
+                attrs = {}
+                if proj_doc.custom_attributes:
+                    try:
+                        attrs = json.loads(proj_doc.custom_attributes) or {}
+                    except Exception:
+                        pass
+                if estimated_duration:
+                    attrs['Estimated Duration'] = estimated_duration
+                    proj_doc.custom_attributes = json.dumps(attrs)
+                    
+                proj_doc.save(ignore_permissions=True)
+                frappe.db.commit()
+                break
+            except Exception as e:
+                if hasattr(e, 'args') and len(e.args) > 0 and e.args[0] == 1412:
+                    time.sleep(0.5)
+                    frappe.db.rollback()
+                    continue
+                raise e
+
         frappe.cache().delete_keys("gis_projects_cache_")
 
-    frappe.db.commit()
-    
     return {"success": True, "id": doc.name}
 
 @frappe.whitelist()
