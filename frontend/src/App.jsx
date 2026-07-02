@@ -375,7 +375,21 @@ export default function App() {
             </div>
             <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span>Role:</span>
-              <strong style={{ color: '#0f172a', background: '#eff6ff', padding: '4px 8px', borderRadius: '6px', border: '1px solid #bfdbfe' }}>
+              <strong style={{
+                color: 'white',
+                background: userInfo?.role === 'Muncipal Commissioner' ? '#15803d'
+                          : userInfo?.role === 'System Manager' ? '#1d4ed8'
+                          : userInfo?.role === 'Executive Engineer' ? '#c2410c'
+                          : userInfo?.role === 'City Engineer' ? '#7c3aed'
+                          : '#374151',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                border: 'none',
+                fontWeight: '700',
+                fontSize: '12px',
+                letterSpacing: '0.3px',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+              }}>
                 {userInfo?.role || 'Guest'}
               </strong>
             </div>
