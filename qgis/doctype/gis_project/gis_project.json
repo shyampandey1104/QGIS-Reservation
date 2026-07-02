@@ -43,6 +43,21 @@
   "description",
   "contractor_details",
   "remarks",
+  "section_break_excel_fields",
+  "gis_id",
+  "old_survey_no_hissa_no",
+  "new_survey_no_hissa_no",
+  "reservation_number",
+  "drc_no",
+  "reservation_name",
+  "village_name",
+  "reservation_drawing_link",
+  "land_acquired_status",
+  "mbmc_7_12",
+  "2019_format_czmp_affected_area",
+  "encroachment_status",
+  "encroachment_photos",
+  "encroachment_link",
   "section_break_2",
   "geometry"
  ],
@@ -239,6 +254,81 @@
    "fieldname": "remarks",
    "fieldtype": "Text",
    "label": "Remarks"
+  },
+  {
+   "fieldname": "section_break_excel_fields",
+   "fieldtype": "Section Break",
+   "label": "Reservation & Land Acquisition (Excel)"
+  },
+  {
+   "fieldname": "gis_id",
+   "fieldtype": "Data",
+   "label": "GIS ID"
+  },
+  {
+   "fieldname": "old_survey_no_hissa_no",
+   "fieldtype": "Data",
+   "label": "Old Survey No / Hissa No"
+  },
+  {
+   "fieldname": "new_survey_no_hissa_no",
+   "fieldtype": "Data",
+   "label": "New Survey No / Hissa No"
+  },
+  {
+   "fieldname": "reservation_number",
+   "fieldtype": "Data",
+   "label": "Reservation Number"
+  },
+  {
+   "fieldname": "drc_no",
+   "fieldtype": "Data",
+   "label": "DRC No"
+  },
+  {
+   "fieldname": "reservation_name",
+   "fieldtype": "Data",
+   "label": "Reservation Name"
+  },
+  {
+   "fieldname": "village_name",
+   "fieldtype": "Data",
+   "label": "Village Name"
+  },
+  {
+   "fieldname": "reservation_drawing_link",
+   "fieldtype": "Data",
+   "label": "Reservation Drawing Link"
+  },
+  {
+   "fieldname": "land_acquired_status",
+   "fieldtype": "Data",
+   "label": "Land Acquired Status"
+  },
+  {
+   "fieldname": "mbmc_7_12",
+   "fieldtype": "Data",
+   "label": "MBMC 7/12"
+  },
+  {
+   "fieldname": "2019_format_czmp_affected_area",
+   "fieldtype": "Data",
+   "label": "2019 Format CZMP Affected Area"
+  },
+  {
+   "fieldname": "encroachment_status",
+   "fieldtype": "Data",
+   "label": "Encroachment Status"
+  },
+  {
+   "fieldname": "encroachment_photos",
+   "fieldtype": "Data",
+   "label": "Encroachment Photos"
+  },
+  {
+   "fieldname": "encroachment_link",
+   "fieldtype": "Data",
+   "label": "Encroachment Link"
   },
   {
    "fieldname": "section_break_2",

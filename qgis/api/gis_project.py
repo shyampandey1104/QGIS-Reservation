@@ -321,25 +321,12 @@ def get_public_stats():
 
 @frappe.whitelist(allow_guest=True)
 def get_projects(status=None, limit=None, omit_geometry=False):
-    filters = {}
-    if status:
-        if "," in status:
-            filters["status"] = ["in", [s.strip() for s in status.split(",")]]
-        else:
-            filters["status"] = status
-
-
-
-    # Non-logged-in users only see approved and post-approval statuses
-    if frappe.session.user == "Guest":
-        filters["status"] = ["in", ["Approved", "Work Started", "Ongoing", "On Hold", "Hold", "Near Completion", "Completed"]]
-
-    if limit:
-        limit = int(limit)
-    
     # Handle string "true"/"false" from frontend
     if isinstance(omit_geometry, str):
         omit_geometry = omit_geometry.lower() == "true"
+
+    if limit:
+        limit = int(limit)
 
     cache_key = f"gis_projects_cache_{frappe.session.user}_{status}_{limit}_{omit_geometry}"
     cached_data = frappe.cache().get_value(cache_key)
@@ -356,9 +343,32 @@ def get_projects(status=None, limit=None, omit_geometry=False):
     else:
         fields = ["*"]
 
+    # Build DB filters: reference layers are always fetched
+    db_filters = None
+    db_or_filters = None
+
+    is_guest = frappe.session.user == "Guest"
+
+    if status or is_guest:
+        # Fetch reference layers OR regular projects matching the status/guest filter
+        db_or_filters = [
+            ["project_type", "like", "MBMC-%"],
+            ["project_type", "like", "VVCM%"],
+            ["project_type", "in", ["BUILDING_INFO", "building_info", "Road", "road"]]
+        ]
+        if status:
+            if "," in status:
+                db_or_filters.append(["status", "in", [s.strip() for s in status.split(",")]])
+            else:
+                db_or_filters.append(["status", "=", status])
+        elif is_guest:
+            # Guest sees approved projects
+            db_or_filters.append(["status", "in", ["Approved", "Work Started", "Ongoing", "On Hold", "Hold", "Near Completion", "Completed"]])
+
     projects = frappe.get_all(
         "GIS Project",
-        filters=filters,
+        filters=db_filters,
+        or_filters=db_or_filters,
         fields=fields,
         order_by="creation desc",
         limit=limit,
@@ -394,6 +404,24 @@ def get_projects(status=None, limit=None, omit_geometry=False):
 
     filtered_projects = []
     for p in projects:
+        # Check if reference layer
+        p_type = p.get("project_type")
+        desc = p.get("description") or ""
+        if "LAYER_TYPE:" in desc:
+            try:
+                p_type = desc.split("LAYER_TYPE:")[1].split(" |")[0].strip()
+            except: pass
+        
+        is_ref = False
+        if p_type:
+            p_type_upper = p_type.upper()
+            if p_type_upper.startswith("MBMC-") or p_type_upper.startswith("VVCM") or p_type_upper in ["BUILDING_INFO", "ROAD"]:
+                is_ref = True
+
+        if is_ref:
+            filtered_projects.append(p)
+            continue
+
         # Admins see all
         if is_admin:
             filtered_projects.append(p)
@@ -562,6 +590,37 @@ def update_status(project_id, status, comment=None):
     doc.flags.ignore_workflow = True
     user_role = _get_user_gis_role()
     
+    # System Manager Admin Override
+    if user_role == "System Manager":
+        doc.db_set("status", status)
+        if status == "Approved":
+            doc.db_set("color", "#16a34a")
+            doc.db_set("docstatus", 1)
+        elif status == "Rejected":
+            doc.db_set("color", "#dc2626")
+            doc.db_set("docstatus", 0)
+        elif status == "Submitted":
+            doc.db_set("color", "#ea580c")
+            doc.db_set("docstatus", 0)
+        elif status == "Correction":
+            doc.db_set("color", "#e11d48")
+            doc.db_set("docstatus", 0)
+        else:
+            doc.db_set("docstatus", 0)
+            
+        if status == "Correction":
+            new_wo = frappe.get_doc({
+                "doctype": "Initiate Work Order",
+                "gis_project": project_id,
+                "approver": "GIS Junior Engineer",
+                "comment": comment or "Sent for Correction"
+            })
+            new_wo.insert(ignore_permissions=True)
+            
+        frappe.cache().delete_keys("gis_projects_cache_")
+        frappe.db.commit()
+        return {"id": project_id, "status": status}
+
     # If the document is currently Submitted (docstatus == 1) but we are transitioning 
     # back to any other active state (like Correction or Pending for Request), reset docstatus to 0 (Draft)
     # to allow editing and save operations without throwing UpdateAfterSubmitError.
@@ -745,212 +804,292 @@ def delete_project(project_id):
 
 @frappe.whitelist()
 def upload_manual_data(ward="Manual Upload", project_type="Other Infrastructure"):
+    """Accept file upload, save to persistent temp dir, enqueue background processing."""
     if not frappe.request.files:
         return {"success": False, "error": "No file provided"}
-        
+
     uploaded_file = frappe.request.files.get("file")
     if not uploaded_file:
         return {"success": False, "error": "Field 'file' missing"}
-    
+
     role = _get_user_gis_role()
     if not role:
         frappe.throw("You do not have a GIS role assigned.")
 
-    # Save to temp file
-    uploaded_file.seek(0)
-    cnt = uploaded_file.read()
     suffix = os.path.splitext(uploaded_file.filename)[1].lower()
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
-        tf.write(cnt)
-        temp_path = tf.name
+    upload_dir = os.path.join(tempfile.gettempdir(), "frappe_gis_uploads")
+    os.makedirs(upload_dir, exist_ok=True)
 
-    def _flip_coords(coords):
-        """Recursively flip [lng, lat] to [lat, lng]"""
+    import uuid
+    job_id = str(uuid.uuid4())
+    dest_path = os.path.join(upload_dir, f"{job_id}{suffix}")
+
+    # Stream file to disk in 8 MB chunks — no RAM spike on web worker
+    with open(dest_path, "wb") as f:
+        uploaded_file.seek(0)
+        chunk_size = 8 * 1024 * 1024
+        while True:
+            chunk = uploaded_file.read(chunk_size)
+            if not chunk:
+                break
+            f.write(chunk)
+
+    original_filename = uploaded_file.filename
+
+    # Store initial job status so the frontend can poll
+    frappe.cache().set_value(
+        f"gis_upload_job_{job_id}",
+        {"status": "queued", "message": "File saved. Processing will begin shortly.", "saved_count": 0},
+        expires_in_sec=3600,
+    )
+
+    # Offload the heavy work to the background long-queue worker
+    frappe.enqueue(
+        "qgis.api.gis_project._process_gis_upload_job",
+        queue="long",
+        timeout=3600,
+        job_id=job_id,
+        upload_job_id=job_id,
+        file_path=dest_path,
+        suffix=suffix,
+        original_filename=original_filename,
+        ward=ward,
+        project_type=project_type,
+        role=role,
+        site=frappe.local.site,
+    )
+
+    return {
+        "success": True,
+        "status": "queued",
+        "job_id": job_id,
+        "message": f"File '{original_filename}' uploaded. Processing in background…",
+    }
+
+
+def _process_gis_upload_job(
+    upload_job_id, file_path, suffix, original_filename, ward, project_type, role, site
+):
+    """Background worker: parse GIS file and insert features into GIS Project DocType."""
+    import frappe as _frappe
+    import json as _json
+    import os as _os
+    import subprocess as _subprocess
+    import shutil as _shutil
+    import zipfile as _zipfile
+    import tempfile as _tempfile
+
+    def _set_status(status, message, saved_count=0, error=None):
+        payload = {"status": status, "message": message, "saved_count": saved_count}
+        if error:
+            payload["error"] = error
+        _frappe.cache().set_value(f"gis_upload_job_{upload_job_id}", payload, expires_in_sec=3600)
+
+    def _flip(coords):
         if isinstance(coords[0], (int, float)):
             return [coords[1], coords[0]]
-        return [_flip_coords(c) for c in coords]
+        return [_flip(c) for c in coords]
+
+    _set_status("processing", "Extracting GIS data…")
 
     try:
-        import zipfile
-        import shutil
         extract_dir = None
         files_to_process = []
-        
+
         if suffix == ".zip":
-            extract_dir = tempfile.mkdtemp()
-            with zipfile.ZipFile(temp_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_dir)
-            for root, dirs, files in os.walk(extract_dir):
+            extract_dir = _tempfile.mkdtemp()
+            with _zipfile.ZipFile(file_path, "r") as zr:
+                zr.extractall(extract_dir)
+            for root, dirs, files in _os.walk(extract_dir):
                 for f in files:
-                    if f.lower().endswith(('.shp', '.geojson', '.kml', '.gpkg')) and not f.startswith("._"):
-                        files_to_process.append(os.path.join(root, f))
+                    if f.lower().endswith((".shp", ".geojson", ".kml", ".gpkg")) and not f.startswith("._"):
+                        files_to_process.append(_os.path.join(root, f))
             if not files_to_process:
                 if extract_dir:
-                    shutil.rmtree(extract_dir)
-                os.unlink(temp_path)
-                return {"success": False, "error": "No valid GIS files (.shp, .geojson, .gpkg, .kml) found in the zip archive."}
+                    _shutil.rmtree(extract_dir)
+                _os.unlink(file_path)
+                _set_status("error", "No valid GIS files found in zip.", error="No .shp/.geojson/.gpkg/.kml in zip")
+                return
         else:
-            path_to_read = temp_path
-            if suffix in [".kmz", ".qgz"]:
-                path_to_read = f"/vsizip/{temp_path}"
+            path_to_read = f"/vsizip/{file_path}" if suffix in (".kmz", ".qgz") else file_path
             files_to_process = [path_to_read]
 
         saved_count = 0
-        
+
         for fpath in files_to_process:
-            # 1. Get List of Layers
-            ogrinfo_path = shutil.which("ogrinfo") or "/usr/bin/ogrinfo"
-            info_cmd = [ogrinfo_path, "-ro", "-q", fpath]
+            ogrinfo_path = _shutil.which("ogrinfo") or "/usr/bin/ogrinfo"
             try:
-                info_res = subprocess.run(info_cmd, capture_output=True, text=True, check=True)
-            except subprocess.CalledProcessError as e:
+                info_res = _subprocess.run([ogrinfo_path, "-ro", "-q", fpath], capture_output=True, text=True, check=True)
+            except _subprocess.CalledProcessError:
                 if suffix == ".qgz":
-                    if extract_dir: shutil.rmtree(extract_dir)
-                    os.unlink(temp_path)
-                    return {"success": False, "error": "You uploaded a QGIS Project file (.qgz). This file only contains styling and settings. Please upload the actual data file (like GeoJSON, GeoPackage, KML, or a Zipped Shapefile)."}
+                    _set_status("error", "Cannot process .qgz file.", error=".qgz not supported")
+                    if extract_dir: _shutil.rmtree(extract_dir)
+                    _os.unlink(file_path)
+                    return
                 continue
             except FileNotFoundError:
-                if extract_dir: shutil.rmtree(extract_dir)
-                os.unlink(temp_path)
-                return {"success": False, "error": "GDAL/ogrinfo not installed on server. Please install gdal-bin."}
-            
+                _set_status("error", "GDAL/ogrinfo not installed.", error="ogrinfo not found")
+                if extract_dir: _shutil.rmtree(extract_dir)
+                _os.unlink(file_path)
+                return
+
             layer_names = []
             for line in info_res.stdout.splitlines():
                 if ": " in line:
                     name = line.split(": ")[1].split(" (")[0].strip()
-                    if name: layer_names.append(name)
+                    if name:
+                        layer_names.append(name)
                 elif line.startswith("1: "):
                     name = line.split("1: ")[1].split(" (")[0].strip()
-                    if name: layer_names.append(name)
-
+                    if name:
+                        layer_names.append(name)
             if not layer_names:
                 layer_names = ["OGRGeoJSON"]
 
-            # 2. Extract and SAVE each feature to GIS Project DocType
             for layer in layer_names:
-                ogr2ogr_path = shutil.which("ogr2ogr") or "/usr/bin/ogr2ogr"
-                cmd = [ogr2ogr_path, "-f", "GeoJSON", "-t_srs", "EPSG:4326", "/vsistdout/", fpath, layer]
+                ogr2ogr_path = _shutil.which("ogr2ogr") or "/usr/bin/ogr2ogr"
                 try:
-                    out = subprocess.run(cmd, capture_output=True, text=True)
+                    out = _subprocess.run(
+                        [ogr2ogr_path, "-f", "GeoJSON", "-t_srs", "EPSG:4326", "/vsistdout/", fpath, layer],
+                        capture_output=True, text=True,
+                    )
                     if not out.stdout.strip():
                         continue
-                    geojson = json.loads(out.stdout)
+                    geojson = _json.loads(out.stdout)
                 except Exception as e:
-                    frappe.log_error(f"ogr2ogr failed for {layer}: {str(e)}", "GIS Error")
+                    _frappe.log_error(f"ogr2ogr failed for {layer}: {str(e)}", "GIS Error")
                     continue
 
+                total_features = len(geojson.get("features", []))
+                _set_status("processing", f"Inserting {total_features} features from layer '{layer}'…", saved_count)
+
                 for feature in geojson.get("features", []):
-                        geom = feature.get("geometry")
-                        if not geom or "coordinates" not in geom: continue
-                        
-                        # Flip coordinates to [lat, lng] for UI consistency
-                        geom["coordinates"] = _flip_coords(geom["coordinates"])
-                        
-                        props = feature.get("properties", {})
-                        
-                        # Create a unique name or use property if exists
-                        p_name = props.get("name") or props.get("road_name") or f"{layer} Feature {saved_count+1}"
-                        # Ensure name is within Frappe's 140 char limit
-                        if len(p_name) > 140:
-                            p_name = p_name[:137] + "..."
-                        
-                        final_type = layer
-                        if final_type == "OGRGeoJSON" and suffix == ".zip":
-                            final_type = os.path.splitext(os.path.basename(fpath))[0]
+                    geom = feature.get("geometry")
+                    if not geom or "coordinates" not in geom:
+                        continue
 
-                        # Auto-register in GIS Category if it doesn't exist
-                        if frappe.db.exists("DocType", "GIS Category"):
-                            if not frappe.db.exists("GIS Category", final_type):
-                                # Determine defaults based on name
-                                is_fill = 0 if "boundary" in final_type.lower() or "road" in final_type.lower() or "drain" in final_type.lower() or "pipe" in final_type.lower() else 1
-                                weight_val = 4 if "boundary" in final_type.lower() else 1.5 if "village" in final_type.lower() else 2 if "road" in final_type.lower() else 3
-                                cat_color = DEFAULT_COLORS.get(final_type) or DEFAULT_COLORS.get(layer) or "#1a73e8"
-                                try:
-                                    cat_doc = frappe.get_doc({
-                                        "doctype": "GIS Category",
-                                        "category_name": final_type,
-                                        "color": cat_color,
-                                        "fill": is_fill,
-                                        "weight": weight_val
-                                    })
-                                    cat_doc.insert(ignore_permissions=True)
-                                    frappe.db.commit()
-                                except Exception as e:
-                                    frappe.log_error(f"Failed to auto-create category {final_type}: {str(e)}")
+                    geom["coordinates"] = _flip(geom["coordinates"])
+                    props = feature.get("properties", {}) or {}
 
-                        # Retrieve color from GIS Category if possible
-                        project_color = None
-                        if frappe.db.exists("DocType", "GIS Category"):
-                            project_color = frappe.db.get_value("GIS Category", final_type, "color")
-                        if not project_color:
-                            project_color = DEFAULT_COLORS.get(final_type) or DEFAULT_COLORS.get(layer) or "#2563eb"
+                    p_name = props.get("name") or props.get("road_name") or f"{layer} Feature {saved_count + 1}"
+                    if len(str(p_name)) > 140:
+                        p_name = str(p_name)[:137] + "..."
 
-                        # Build custom_attributes from all props
-                        custom_attrs = {}
-                        for prop_k, prop_v in props.items():
-                            custom_attrs[prop_k] = prop_v
+                    final_type = layer
+                    if final_type == "OGRGeoJSON" and suffix == ".zip":
+                        final_type = _os.path.splitext(_os.path.basename(fpath))[0]
 
-                        doc = frappe.get_doc({
-                            "doctype": "GIS Project",
-                            "project_name": p_name,
-                            "ward": ward,
-                            "project_type": final_type, 
-                            "status": "Draft",
-                            "color": project_color,
-                            "description": f"LAYER_TYPE:{layer} | Imported from {uploaded_file.filename}",
-                            "submitted_by_role": role,
-                            "geometry": json.dumps(geom),
-                            "custom_attributes": json.dumps(custom_attrs),
-                            "area_name": props.get("area_name") or props.get("Area Name"),
-                            "area_size": props.get("area_size") or props.get("Area Size"),
-                            "yearly_rent": props.get("yearly_rent") or props.get("Yearly Rent"),
-                            "remarks": props.get("Remark") or props.get("remarks") or f"Source Layer: {layer}",
-                            "road_name": props.get("road_name") or props.get("name") or props.get("fly_name") or props.get("bridg_name") or props.get("unp_name") or props.get("Rail_Route"),
-                            "road_no": props.get("road_no") or props.get("road_num"),
-                            "road_type": props.get("road_type") or props.get("bridg_type") or props.get("unp_type"),
-                            "pave_type": props.get("pave_type"),
-                            "landmark": props.get("landmark"),
-                            "authority": props.get("authority"),
-                            "traffic": props.get("traffic"),
-                            "width": props.get("width"),
-                            "shape_length": props.get("SHAPE_Leng") or props.get("shape_leng"),
-                            "unp_name": props.get("unp_name"),
-                            "unp_type": props.get("unp_type") or props.get("bridg_type"),
-                            "road_length": props.get("length") or props.get("road_length") or props.get("SHAPE_Leng"),
-                            "dma_no": props.get("dma_no"),
-                            "ward_no": props.get("ward_no") or props.get("ward"),
-                            "junc_name": props.get("junc_name"),
-                            "facility": props.get("Facility") or props.get("facility"),
-                            "rail_route": props.get("Rail_Route") or props.get("rail_route"),
-                            "bridg_name": props.get("bridg_name"),
-                            "bridg_type": props.get("bridg_type"),
-                            "fly_name": props.get("fly_name")
-                        })
-                        doc.insert(ignore_permissions=True, ignore_mandatory=True)
-                        saved_count += 1
-                        
-                        # Commit every 100 records to prevent tabSeries lock/contention
-                        if saved_count % 100 == 0:
-                            frappe.db.commit()
-        
-        frappe.cache().delete_keys("gis_projects_cache_")
-        frappe.db.commit()
-        # Cleanup
-        os.unlink(temp_path)
+                    if _frappe.db.exists("DocType", "GIS Category"):
+                        if not _frappe.db.exists("GIS Category", final_type):
+                            is_fill = 0 if any(k in final_type.lower() for k in ("boundary", "road", "drain", "pipe")) else 1
+                            weight_val = 4 if "boundary" in final_type.lower() else 1.5 if "village" in final_type.lower() else 2 if "road" in final_type.lower() else 3
+                            cat_color = DEFAULT_COLORS.get(final_type) or DEFAULT_COLORS.get(layer) or "#1a73e8"
+                            try:
+                                _frappe.get_doc({
+                                    "doctype": "GIS Category",
+                                    "category_name": final_type,
+                                    "color": cat_color,
+                                    "fill": is_fill,
+                                    "weight": weight_val,
+                                }).insert(ignore_permissions=True)
+                                _frappe.db.commit()
+                            except Exception:
+                                pass
+
+                    project_color = None
+                    if _frappe.db.exists("DocType", "GIS Category"):
+                        project_color = _frappe.db.get_value("GIS Category", final_type, "color")
+                    if not project_color:
+                        project_color = DEFAULT_COLORS.get(final_type) or DEFAULT_COLORS.get(layer) or "#2563eb"
+
+                    _frappe.get_doc({
+                        "doctype": "GIS Project",
+                        "project_name": p_name,
+                        "ward": ward,
+                        "project_type": final_type,
+                        "status": "Draft",
+                        "color": project_color,
+                        "description": f"LAYER_TYPE:{layer} | Imported from {original_filename}",
+                        "submitted_by_role": role,
+                        "geometry": _json.dumps(geom),
+                        "custom_attributes": _json.dumps(dict(props)),
+                        "gis_id": props.get("GIS ID"),
+                        "old_survey_no_hissa_no": props.get("Old Survey No_Hissa No") or props.get("Old Survey No / Hissa No"),
+                        "new_survey_no_hissa_no": props.get("New Survey No_Hissa No") or props.get("New Survey No / Hissa No"),
+                        "reservation_number": props.get("Reservation Number"),
+                        "drc_no": props.get("DRC NO") or props.get("DRC No"),
+                        "reservation_name": props.get("Reservation Name"),
+                        "village_name": props.get("Village Name"),
+                        "reservation_drawing_link": props.get("RESERVATION_DRAWING LINK") or props.get("RESERVATION_DRAWING_LINK"),
+                        "land_acquired_status": props.get("LAND ACQUIRED STATUS") or props.get("LAND_ACQUIRED_STATUS"),
+                        "mbmc_7_12": props.get("MBMC 7_12") or props.get("MBMC_7_12"),
+                        "2019_format_czmp_affected_area": props.get("2019_FORMAT_CZMP_AFFECTED_AREA"),
+                        "encroachment_status": props.get("ENCROACHMENT_STATUS"),
+                        "encroachment_photos": props.get("ENCROACHMENT_PHOTOS"),
+                        "encroachment_link": props.get("ENCROACHMENT_LINK"),
+                        "area_name": props.get("area_name") or props.get("Area Name"),
+                        "area_size": props.get("area_size") or props.get("Area Size"),
+                        "yearly_rent": props.get("yearly_rent") or props.get("Yearly Rent"),
+                        "remarks": props.get("Remark") or props.get("remarks") or f"Source Layer: {layer}",
+                        "road_name": props.get("road_name") or props.get("name") or props.get("fly_name") or props.get("bridg_name") or props.get("unp_name") or props.get("Rail_Route"),
+                        "road_no": props.get("road_no") or props.get("road_num"),
+                        "road_type": props.get("road_type") or props.get("bridg_type") or props.get("unp_type"),
+                        "pave_type": props.get("pave_type"),
+                        "landmark": props.get("landmark"),
+                        "authority": props.get("authority"),
+                        "traffic": props.get("traffic"),
+                        "width": props.get("width"),
+                        "shape_length": props.get("SHAPE_Leng") or props.get("shape_leng"),
+                        "unp_name": props.get("unp_name"),
+                        "unp_type": props.get("unp_type") or props.get("bridg_type"),
+                        "road_length": props.get("length") or props.get("road_length") or props.get("SHAPE_Leng"),
+                        "dma_no": props.get("dma_no"),
+                        "ward_no": props.get("ward_no") or props.get("ward"),
+                        "junc_name": props.get("junc_name"),
+                        "facility": props.get("Facility") or props.get("facility"),
+                        "rail_route": props.get("Rail_Route") or props.get("rail_route"),
+                        "bridg_name": props.get("bridg_name"),
+                        "bridg_type": props.get("bridg_type"),
+                        "fly_name": props.get("fly_name"),
+                    }).insert(ignore_permissions=True, ignore_mandatory=True)
+                    saved_count += 1
+
+                    if saved_count % 100 == 0:
+                        _frappe.db.commit()
+                        _set_status("processing", f"Inserted {saved_count} features…", saved_count)
+
+        _frappe.cache().delete_keys("gis_projects_cache_")
+        _frappe.db.commit()
+
+        try:
+            _os.unlink(file_path)
+        except Exception:
+            pass
         if extract_dir:
-            shutil.rmtree(extract_dir)
-        
-        return {
-            "success": True,
-            "message": f"Successfully imported {saved_count} features into GIS Project DocType",
-            "saved_count": saved_count
-        }
-        
-    except Exception as e:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-        return {"success": False, "error": str(e)}
+            try:
+                _shutil.rmtree(extract_dir)
+            except Exception:
+                pass
 
+        _set_status("done", f"Successfully imported {saved_count} features.", saved_count)
+
+    except Exception as e:
+        _frappe.log_error(_frappe.get_traceback(), "GIS Upload Background Job Error")
+        try:
+            if _os.path.exists(file_path):
+                _os.unlink(file_path)
+        except Exception:
+            pass
+        _set_status("error", f"Processing failed: {str(e)}", error=str(e))
+
+
+@frappe.whitelist()
+def get_upload_job_status(job_id):
+    """Poll background upload job status from the frontend."""
+    data = frappe.cache().get_value(f"gis_upload_job_{job_id}")
+    if not data:
+        return {"status": "not_found", "message": "Job not found or expired."}
+    return data
 
 @frappe.whitelist(allow_guest=True)
 def get_nearby_places(lat, lng, radius=1000, place_type=None):
@@ -1157,16 +1296,41 @@ def submit_work_order():
     project_id = frappe.form_dict.get('project_id')
     comment = frappe.form_dict.get('comment')
     approver = frappe.form_dict.get('approver')
+    
+    description = frappe.form_dict.get('description')
+    estimated_cost = frappe.form_dict.get('estimated_cost')
+    estimated_duration = frappe.form_dict.get('estimated_duration')
+    tentative_start_date = frappe.form_dict.get('tentative_start_date')
+    
     file_doc = None
     
     if not project_id:
         frappe.throw("Project ID is required")
         
-    # Create the Work Order first
+    # Format a clean, detailed summary to save in the workflow history comments
+    summary_parts = []
+    if description:
+        summary_parts.append(f"Description: {description}")
+    if estimated_cost:
+        summary_parts.append(f"Estimated Cost: {estimated_cost}")
+    if estimated_duration:
+        summary_parts.append(f"Estimated Duration: {estimated_duration}")
+    if tentative_start_date:
+        summary_parts.append(f"Estimated Tentative Start Date: {tentative_start_date}")
+        
+    proposal_summary = "\n".join(summary_parts)
+    full_comment = comment or ""
+    if proposal_summary:
+        if full_comment:
+            full_comment = f"{full_comment}\n\n{proposal_summary}"
+        else:
+            full_comment = proposal_summary
+
+    # Create the Work Order document
     doc = frappe.get_doc({
         "doctype": "Initiate Work Order",
         "gis_project": project_id,
-        "comment": comment,
+        "comment": full_comment,
         "approver": approver,
     })
     doc.insert(ignore_permissions=True)
@@ -1190,10 +1354,32 @@ def submit_work_order():
         # Update the attachment field in the document
         doc.db_set('attachment', file_doc.file_url)
 
-    # Immediately update the linked GIS Project's status to 'Pending for Request' and color to Orange (#ea580c)
+    # Update the linked GIS Project's status, color, and proposal metadata fields
     if project_id:
-        frappe.db.set_value("GIS Project", project_id, "status", "Pending for Request")
-        frappe.db.set_value("GIS Project", project_id, "color", "#ea580c")
+        proj_doc = frappe.get_doc("GIS Project", project_id)
+        proj_doc.status = "Pending for Request"
+        proj_doc.color = "#ea580c"
+        
+        if description:
+            proj_doc.description = description
+        if estimated_cost:
+            proj_doc.budget = estimated_cost
+        if tentative_start_date:
+            proj_doc.start_date = tentative_start_date
+            
+        # Update custom_attributes with duration
+        import json
+        attrs = {}
+        if proj_doc.custom_attributes:
+            try:
+                attrs = json.loads(proj_doc.custom_attributes) or {}
+            except Exception:
+                pass
+        if estimated_duration:
+            attrs['Estimated Duration'] = estimated_duration
+            proj_doc.custom_attributes = json.dumps(attrs)
+            
+        proj_doc.save(ignore_permissions=True)
         frappe.cache().delete_keys("gis_projects_cache_")
 
     frappe.db.commit()
@@ -1657,6 +1843,686 @@ def remove_tenant_attachment(project_id, file_url):
     frappe.cache().delete_keys("gis_projects_cache_")
     frappe.db.commit()
     return {"success": True}
+
+
+@frappe.whitelist(allow_guest=True)
+def check_files_exist(paths=None):
+    if paths is None:
+        paths = frappe.form_dict.get("paths")
+        
+    if paths is None:
+        return {}
+        
+    import json
+    if isinstance(paths, str):
+        try:
+            paths = json.loads(paths)
+        except Exception:
+            paths = [paths]
+            
+    if not isinstance(paths, (list, tuple)):
+        paths = [paths]
+            
+    import os
+    from frappe.utils import get_site_path
+    
+    downloads_dir = "/Users/shyamkumarpandey/Downloads/MIRABHAINDAR MUNICIPAL CORPORATION RESERVATATION WORK 2023"
+    public_files_dir = get_site_path("public", "files")
+    
+    results = {}
+    for path in paths:
+        if not path or not isinstance(path, str):
+            continue
+            
+        clean_path = path
+        if clean_path.startswith("/files/"):
+          clean_path = clean_path[7:]
+        elif clean_path.startswith("files/"):
+          clean_path = clean_path[6:]
+        elif clean_path.startswith("/mbmc_docs/"):
+          clean_path = clean_path[11:]
+        elif clean_path.startswith("mbmc_docs/"):
+          clean_path = clean_path[10:]
+        elif clean_path.startswith("/"):
+          clean_path = clean_path[1:]
+            
+        clean_path = clean_path.replace("\\", "/")
+        
+        full_public_path = os.path.normpath(os.path.join(public_files_dir, clean_path))
+        full_downloads_path = os.path.normpath(os.path.join(downloads_dir, clean_path))
+        
+        exists = os.path.exists(full_public_path) or os.path.exists(full_downloads_path)
+        results[path] = exists
+        
+    return results
+
+
+def ensure_property_survey_doctype():
+    if not frappe.db.exists("DocType", "Property Survey"):
+        try:
+            doc = frappe.get_doc({
+                "doctype": "DocType",
+                "name": "Property Survey",
+                "module": "qgis",
+                "custom": 1,
+                "autoname": "PROP-.####",
+                "fields": [
+                    {"fieldname": "property_id", "label": "Property ID", "fieldtype": "Data"},
+                    {"fieldname": "category", "label": "Category", "fieldtype": "Data"},
+                    {"fieldname": "property_type", "label": "Property Type", "fieldtype": "Data"},
+                    {"fieldname": "plot_area", "label": "Plot Area", "fieldtype": "Data"},
+                    {"fieldname": "constructed_area", "label": "Constructed Area", "fieldtype": "Data"},
+                    {"fieldname": "carpet_area", "label": "Carpet Area", "fieldtype": "Data"},
+                    {"fieldname": "existing_usage", "label": "Existing Usage", "fieldtype": "Data"},
+                    {"fieldname": "address", "label": "Address", "fieldtype": "Text"},
+                    {"fieldname": "geo_location", "label": "Geo Location", "fieldtype": "Long Text"},
+                    {"fieldname": "tenant_name", "label": "Tenant Name", "fieldtype": "Data"},
+                    {"fieldname": "contact", "label": "Contact", "fieldtype": "Data"},
+                    {"fieldname": "rental_period", "label": "Rental Period", "fieldtype": "Data"},
+                    {"fieldname": "documents", "label": "Documents", "fieldtype": "Data"},
+                    {"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Draft\nSubmitted"}
+                ],
+                "permissions": [
+                    {
+                        "role": "System Manager",
+                        "read": 1, "write": 1, "create": 1, "delete": 1
+                    }
+                ]
+            })
+            doc.insert(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception as e:
+            frappe.log_error(f"Failed to create custom DocType Property Survey: {str(e)}")
+    else:
+        has_category = frappe.db.exists("DocField", {"parent": "Property Survey", "fieldname": "category"}) or frappe.db.exists("Custom Field", {"dt": "Property Survey", "fieldname": "category"})
+        if not has_category:
+            try:
+                frappe.get_doc({
+                    "doctype": "Custom Field",
+                    "dt": "Property Survey",
+                    "fieldname": "category",
+                    "label": "Category",
+                    "fieldtype": "Data",
+                    "insert_after": "property_type"
+                }).insert(ignore_permissions=True)
+                frappe.db.commit()
+            except Exception as e:
+                frappe.log_error(title="Prop Survey add category custom field err", message=str(e))
+        
+        has_property_id = frappe.db.exists("DocField", {"parent": "Property Survey", "fieldname": "property_id"}) or frappe.db.exists("Custom Field", {"dt": "Property Survey", "fieldname": "property_id"})
+        if not has_property_id:
+            try:
+                frappe.get_doc({
+                    "doctype": "Custom Field",
+                    "dt": "Property Survey",
+                    "fieldname": "property_id",
+                    "label": "Property ID",
+                    "fieldtype": "Data",
+                    "insert_after": "name"
+                }).insert(ignore_permissions=True)
+                frappe.db.commit()
+            except Exception as e:
+                frappe.log_error(title="Prop Survey add property_id custom field err", message=str(e))
+
+@frappe.whitelist(allow_guest=True)
+def save_property_survey(**kwargs):
+    data = kwargs.get("data")
+    if not data:
+        data = frappe.form_dict.get("data")
+    if not data and hasattr(frappe, "request"):
+        if hasattr(frappe.request, "get_json"):
+            try:
+                req_json = frappe.request.get_json()
+                if req_json and "data" in req_json:
+                    data = req_json["data"]
+                else:
+                    data = req_json
+            except Exception:
+                pass
+
+    if isinstance(data, str):
+        import json
+        try:
+            data = json.loads(data)
+        except Exception:
+            data = None
+            
+    if not data or not isinstance(data, dict):
+        frappe.throw("Invalid or missing survey data payload")
+        
+    ensure_property_survey_doctype()
+    
+    survey_name = frappe.db.get_value("Property Survey", {"name": data.get("name")}) if data.get("name") else None
+    
+    if survey_name:
+        doc = frappe.get_doc("Property Survey", survey_name)
+        doc.update({
+            "property_id": data.get("property_id"),
+            "category": data.get("category"),
+            "property_type": data.get("property_type"),
+            "plot_area": data.get("plot_area"),
+            "constructed_area": data.get("constructed_area"),
+            "carpet_area": data.get("carpet_area"),
+            "existing_usage": data.get("existing_usage"),
+            "address": data.get("address"),
+            "geo_location": data.get("geo_location"),
+            "tenant_name": data.get("tenant_name"),
+            "contact": data.get("contact"),
+            "rental_period": data.get("rental_period"),
+            "documents": data.get("documents"),
+            "status": data.get("status", "Draft")
+        })
+        doc.save(ignore_permissions=True)
+    else:
+        doc = frappe.get_doc({
+            "doctype": "Property Survey",
+            "property_id": data.get("property_id"),
+            "category": data.get("category"),
+            "property_type": data.get("property_type"),
+            "plot_area": data.get("plot_area"),
+            "constructed_area": data.get("constructed_area"),
+            "carpet_area": data.get("carpet_area"),
+            "existing_usage": data.get("existing_usage"),
+            "address": data.get("address"),
+            "geo_location": data.get("geo_location"),
+            "tenant_name": data.get("tenant_name"),
+            "contact": data.get("contact"),
+            "rental_period": data.get("rental_period"),
+            "documents": data.get("documents"),
+            "status": data.get("status", "Draft")
+        })
+        doc.insert(ignore_permissions=True)
+        
+    frappe.db.commit()
+    return {"status": "success", "message": f"Survey saved as {doc.status} successfully!", "name": doc.name}
+
+def ensure_user_custom_fields():
+    if not frappe.db.exists("Custom Field", {"dt": "User", "fieldname": "custom_ward"}):
+        try:
+            frappe.get_doc({
+                "doctype": "Custom Field",
+                "dt": "User",
+                "fieldname": "custom_ward",
+                "label": "Ward / Access Level",
+                "fieldtype": "Data",
+                "insert_after": "email"
+            }).insert(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception as e:
+            frappe.log_error(f"Failed to create custom field for User: {str(e)}")
+
+
+@frappe.whitelist()
+def get_gis_users_and_roles():
+    ensure_user_custom_fields()
+    
+    # Fetch all system users
+    users_data = frappe.db.get_all(
+        "User",
+        filters={"user_type": "System User", "name": ["not in", ["Administrator", "Guest"]]},
+        fields=["name", "email", "first_name", "last_name", "enabled", "custom_ward"]
+    )
+    
+    users = []
+    for u in users_data:
+        # Get all roles assigned to this user
+        roles = [r.role for r in frappe.get_all("Has Role", filters={"parent": u.name}, fields=["role"])]
+        
+        users.append({
+            "email": u.email,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+            "name": f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email,
+            "roles": roles, # Array of roles!
+            "ward_access": u.custom_ward or "All Wards",
+            "enabled": u.enabled
+        })
+        
+    # Get all active roles from database
+    roles_data = frappe.db.get_all("Role", filters={"disabled": 0}, fields=["name"], order_by="name")
+    all_roles = [r.name for r in roles_data]
+    
+    # Calculate user counts per role
+    role_counts = {}
+    for r in all_roles:
+        role_counts[r] = 0
+    for u in users:
+        for r in u["roles"]:
+            if r in role_counts:
+                role_counts[r] += 1
+                
+    # Get actual Custom DocPerm permissions for all roles
+    permissions = {}
+    
+    matrix_mapping = {
+        "view_map": ("GIS Project", "read"),
+        "upload_layer": ("GIS Project", "create"),
+        "edit_attributes": ("GIS Project", "write"),
+        "create_proposal": ("Initiate Work Order", "create"),
+        "approve_request": ("Initiate Work Order", "submit"),
+        "generate_work_order": ("Initiate Work Order", "write"),
+        "manage_users": ("User", "write")
+    }
+    
+    for r in all_roles:
+        permissions[r] = {}
+        for key, (doctype, perm_field) in matrix_mapping.items():
+            permissions[r][key] = bool(frappe.db.get_value("Custom DocPerm", {"parent": doctype, "role": r}, perm_field))
+            
+    return {
+        "users": users,
+        "all_roles": all_roles,
+        "role_counts": role_counts,
+        "permissions": permissions
+    }
+
+
+@frappe.whitelist()
+def create_gis_user(email, first_name, roles, ward_access, password, last_name=None):
+    ensure_user_custom_fields()
+    
+    if frappe.db.exists("User", email):
+        frappe.throw(f"User with email {email} already exists.")
+        
+    if isinstance(roles, str):
+        if roles.startswith("["):
+            roles = json.loads(roles)
+        else:
+            roles = [roles]
+            
+    user = frappe.get_doc({
+        "doctype": "User",
+        "email": email,
+        "first_name": first_name,
+        "last_name": last_name,
+        "send_welcome_email": 0,
+        "user_type": "System User",
+        "custom_ward": ward_access,
+        "roles": [{"role": r} for r in roles]
+    })
+    
+    if not any(r["role"] == "All" for r in user.roles):
+        user.append("roles", {"role": "All"})
+        
+    user.insert(ignore_permissions=True)
+    
+    # Set password
+    from frappe.utils.password import update_password
+    update_password(email, password)
+    
+    return {"success": True, "message": "User created successfully"}
+
+
+@frappe.whitelist()
+def update_gis_user(email, first_name, roles, ward_access, enabled, last_name=None):
+    if not frappe.db.exists("User", email):
+        frappe.throw(f"User {email} not found.")
+        
+    if isinstance(roles, str):
+        if roles.startswith("["):
+            roles = json.loads(roles)
+        else:
+            roles = [roles]
+            
+    user = frappe.get_doc("User", email)
+    user.first_name = first_name
+    user.last_name = last_name
+    user.custom_ward = ward_access
+    user.enabled = int(enabled)
+    
+    user.set("roles", [{"role": r} for r in roles])
+    if not any(r["role"] == "All" for r in user.roles):
+        user.append("roles", {"role": "All"})
+        
+    user.save(ignore_permissions=True)
+    frappe.db.commit()
+    
+    return {"success": True}
+
+
+@frappe.whitelist()
+def delete_gis_user(email):
+    if not frappe.db.exists("User", email):
+        frappe.throw(f"User {email} not found.")
+    frappe.delete_doc("User", email, ignore_permissions=True)
+    frappe.db.commit()
+    return {"success": True}
+
+
+@frappe.whitelist()
+def update_gis_role_permissions(permissions):
+    if isinstance(permissions, str):
+        permissions = json.loads(permissions)
+        
+    matrix_mapping = {
+        "view_map": ("GIS Project", "read"),
+        "upload_layer": ("GIS Project", "create"),
+        "edit_attributes": ("GIS Project", "write"),
+        "create_proposal": ("Initiate Work Order", "create"),
+        "approve_request": ("Initiate Work Order", "submit"),
+        "generate_work_order": ("Initiate Work Order", "write"),
+        "manage_users": ("User", "write")
+    }
+    
+    for r_backend in permissions:
+        for key, val in permissions[r_backend].items():
+            if key in matrix_mapping:
+                doctype, perm_field = matrix_mapping[key]
+                set_doctype_perm_value(doctype, r_backend, perm_field, val)
+                    
+    frappe.clear_cache()
+    return {"success": True}
+
+
+def set_doctype_perm_value(doctype, role, perm_field, value):
+    name = frappe.db.get_value("Custom DocPerm", {"parent": doctype, "role": role})
+    int_value = 1 if value else 0
+    if name:
+        frappe.db.set_value("Custom DocPerm", name, perm_field, int_value)
+    else:
+        idx = frappe.db.count("Custom DocPerm", {"parent": doctype})
+        doc = frappe.get_doc({
+            "doctype": "Custom DocPerm",
+            "parent": doctype,
+            "parenttype": "DocType",
+            "parentfield": "permissions",
+            "role": role,
+            "idx": idx,
+            perm_field: int_value
+        })
+        doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+
+
+@frappe.whitelist()
+def create_gis_role(role_name):
+    if not role_name:
+        frappe.throw("Role name is required.")
+        
+    if frappe.db.exists("Role", role_name):
+        frappe.throw(f"Role {role_name} already exists.")
+        
+    doc = frappe.get_doc({
+        "doctype": "Role",
+        "role_name": role_name
+    })
+    doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+    
+    return {"success": True, "message": f"Role {role_name} created successfully"}
+
+
+@frappe.whitelist()
+def get_user_permissions(user):
+    permissions = frappe.db.get_all(
+        "User Permission",
+        filters={"user": user},
+        fields=["name", "allow", "for_value", "applicable_for"]
+    )
+    return permissions
+
+
+@frappe.whitelist()
+def add_user_permission(user, allow, for_value):
+    if not frappe.db.exists("User", user):
+        frappe.throw(f"User {user} does not exist.")
+    
+    # Check if already exists
+    if frappe.db.exists("User Permission", {"user": user, "allow": allow, "for_value": for_value}):
+        return {"success": True, "message": "Permission already exists."}
+        
+    doc = frappe.get_doc({
+        "doctype": "User Permission",
+        "user": user,
+        "allow": allow,
+        "for_value": for_value,
+        "apply_to_all_doctypes": 1
+    })
+    doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+    return {"success": True}
+
+
+@frappe.whitelist()
+def delete_user_permission(name):
+    if not frappe.db.exists("User Permission", name):
+        frappe.throw("User permission record not found.")
+    frappe.delete_doc("User Permission", name, ignore_permissions=True)
+    frappe.db.commit()
+    return {"success": True}
+
+
+@frappe.whitelist(allow_guest=True)
+def get_csrf_token_api():
+    import frappe.sessions
+    return frappe.sessions.get_csrf_token()
+
+
+@frappe.whitelist(allow_guest=True)
+def get_property_surveys():
+    ensure_property_survey_doctype()
+    surveys = frappe.get_all("Property Survey", fields=["*"], order_by="creation desc")
+    return {"status": "success", "data": surveys}
+
+
+def ensure_register_tenant_doctype():
+    if not frappe.db.exists("DocType", "Register Tenant"):
+        try:
+            doc = frappe.get_doc({
+                "doctype": "DocType",
+                "name": "Register Tenant",
+                "module": "QGIS",
+                "custom": 1,
+                "autoname": "TENANT-.#####",
+                "fields": [
+                    {"fieldname": "tenant_name", "label": "Tenant Name", "fieldtype": "Data", "reqd": 1},
+                    {"fieldname": "profession", "label": "Profession", "fieldtype": "Data"},
+                    {"fieldname": "purpose_of_use", "label": "Purpose of Use", "fieldtype": "Data"},
+                    {"fieldname": "contact_information", "label": "Contact Information", "fieldtype": "Data"},
+                    {"fieldname": "rental_period", "label": "Rental Period", "fieldtype": "Data"},
+                    {"fieldname": "aadhar_number", "label": "Aadhar Number", "fieldtype": "Data"},
+                    {"fieldname": "gst_number", "label": "GST Number", "fieldtype": "Data"},
+                    {"fieldname": "pan_card_number", "label": "PAN Card Number", "fieldtype": "Data"},
+                    {"fieldname": "rent_amount", "label": "Rent Amount", "fieldtype": "Currency"},
+                    {"fieldname": "renewal_date", "label": "Renewal Date", "fieldtype": "Data"},
+                    {"fieldname": "property_id", "label": "Property ID", "fieldtype": "Data"},
+                    {"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Draft\nActive\nInactive", "default": "Draft"},
+                    {"fieldname": "attachments", "label": "Attachments", "fieldtype": "Code", "options": "JSON"}
+                ],
+                "permissions": [
+                    {
+                        "role": "System Manager",
+                        "read": 1, "write": 1, "create": 1, "delete": 1
+                    }
+                ]
+            })
+            doc.insert(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception as e:
+            frappe.log_error(f"Error creating Register Tenant DocType: {str(e)}")
+
+
+@frappe.whitelist()
+def register_tenant():
+    import json
+    ensure_register_tenant_doctype()
+    data = frappe.local.form_dict
+    if not data:
+        data = frappe.parse_json(frappe.request.data)
+        
+    tenant_name = data.get("tenant_name")
+    if not tenant_name:
+        frappe.throw("Tenant Name is required")
+        
+    doc = frappe.get_doc({
+        "doctype": "Register Tenant",
+        "tenant_name": tenant_name,
+        "profession": data.get("profession"),
+        "purpose_of_use": data.get("purpose_of_use"),
+        "contact_information": data.get("contact_information"),
+        "rental_period": data.get("rental_period"),
+        "aadhar_number": data.get("aadhar_number"),
+        "gst_number": data.get("gst_number"),
+        "pan_card_number": data.get("pan_card_number"),
+        "rent_amount": data.get("rent_amount"),
+        "renewal_date": data.get("renewal_date"),
+        "property_id": data.get("property_id"),
+        "status": data.get("status") or "Active",
+        "attachments": data.get("attachments")
+    })
+    doc.insert()
+    
+    # Update active tenant details on GIS Project (both column if exists and custom_attributes)
+    property_id = data.get("property_id")
+    if property_id and frappe.db.exists("GIS Project", property_id):
+        p_doc = frappe.get_doc("GIS Project", property_id)
+        
+        custom_attrs = {}
+        if p_doc.custom_attributes:
+            try:
+                custom_attrs = frappe.parse_json(p_doc.custom_attributes) or {}
+            except Exception:
+                pass
+        custom_attrs["tenant_name"] = tenant_name
+        p_doc.custom_attributes = json.dumps(custom_attrs)
+        
+        meta = frappe.get_meta("GIS Project")
+        if meta.has_field("tenant_name"):
+            p_doc.tenant_name = tenant_name
+        p_doc.save(ignore_permissions=True)
+        
+    frappe.db.commit()
+    return {"status": "success", "message": "Tenant registered successfully", "name": doc.name}
+
+
+@frappe.whitelist(allow_guest=False)
+def get_registered_tenants(property_id=None):
+    ensure_register_tenant_doctype()
+    # When called via api.js call() helper, params come as JSON body
+    if not property_id:
+        try:
+            body = frappe.parse_json(frappe.request.data) or {}
+            property_id = body.get("property_id") or frappe.local.form_dict.get("property_id")
+        except Exception:
+            property_id = frappe.local.form_dict.get("property_id")
+    if not property_id:
+        return []
+    tenants = frappe.get_all(
+        "Register Tenant",
+        filters={"property_id": property_id},
+        fields=["name", "tenant_name", "profession", "purpose_of_use", "contact_information", "rental_period", "aadhar_number", "gst_number", "pan_card_number", "rent_amount", "renewal_date", "status", "attachments", "creation"],
+        order_by="creation desc"
+    )
+    return tenants
+
+
+@frappe.whitelist(allow_guest=True)
+def get_all_registered_tenants():
+    ensure_register_tenant_doctype()
+    tenants = frappe.get_all(
+        "Register Tenant",
+        fields=["name", "tenant_name", "profession", "purpose_of_use", "contact_information", "rental_period", "aadhar_number", "gst_number", "pan_card_number", "rent_amount", "renewal_date", "property_id", "status", "creation"],
+        order_by="creation desc"
+    )
+    return tenants
+
+
+@frappe.whitelist(allow_guest=True)
+def run_overlap_test(project_id="GIS-PROJ-05944"):
+    import json
+    
+    def extract_points(coords):
+        if not isinstance(coords, list):
+            return []
+        if len(coords) >= 2 and isinstance(coords[0], (int, float)) and isinstance(coords[1], (int, float)):
+            return [[coords[0], coords[1]]]
+        points = []
+        for c in coords:
+            if isinstance(c, list):
+                points.extend(extract_points(c))
+        return points
+
+    def get_bbox(points):
+        if not points:
+            return None
+        lats = [p[0] for p in points]
+        lngs = [p[1] for p in points]
+        return min(lats), max(lats), min(lngs), max(lngs)
+
+    proj = frappe.get_doc("GIS Project", project_id)
+    print(f"Project ID: {proj.name}")
+    print(f"Project Type: {proj.project_type}")
+    
+    geom_str = proj.geometry
+    if not geom_str:
+        return "No geometry"
+        
+    geom = json.loads(geom_str)
+    sel_coords = geom.get("coordinates")
+    sel_points = extract_points(sel_coords)
+    sel_bbox = get_bbox(sel_points)
+    
+    buildings = frappe.get_all(
+        "GIS Project",
+        filters={"project_type": ["in", ["BUILDING_INFO", "building_info"]]},
+        fields=["name", "project_name", "geometry", "custom_attributes"]
+    )
+    
+    overlaps = []
+    for b in buildings:
+        if not b.geometry:
+            continue
+        try:
+            b_geom = json.loads(b.geometry)
+            b_coords = b_geom.get("coordinates")
+            b_pts = extract_points(b_coords)
+            b_bbox = get_bbox(b_pts)
+            if not b_bbox or not sel_bbox:
+                continue
+                
+            if (sel_bbox[1] < b_bbox[0] or sel_bbox[0] > b_bbox[1] or
+                sel_bbox[3] < b_bbox[2] or sel_bbox[2] > b_bbox[3]):
+                continue
+                
+            shares_vertex = False
+            for bp in b_pts:
+                for sp in sel_points:
+                    if abs(bp[0] - sp[0]) < 0.0001 and abs(bp[1] - sp[1]) < 0.0001:
+                        shares_vertex = True
+                        break
+                if shares_vertex:
+                    break
+                    
+            if shares_vertex:
+                overlaps.append((b, "shared_vertex"))
+            else:
+                b_centroid = [sum(p[0] for p in b_pts)/len(b_pts), sum(p[1] for p in b_pts)/len(b_pts)]
+                if (sel_bbox[0] <= b_centroid[0] <= sel_bbox[1] and
+                    sel_bbox[2] <= b_centroid[1] <= sel_bbox[3]):
+                    overlaps.append((b, "centroid_in_bbox"))
+        except Exception:
+            pass
+            
+    res_list = []
+    for o, reason in overlaps:
+        attrs = {}
+        try:
+            attrs = json.loads(o.custom_attributes) if o.custom_attributes else {}
+        except Exception:
+            pass
+        bldg_id = attrs.get("BUILDING I") or attrs.get("Text") or attrs.get("BUILDING N") or "N/A"
+        res_list.append(f"ID: {o.name}, Building ID: {bldg_id}, Reason: {reason}")
+    
+    print(f"Found {len(res_list)} overlaps:")
+    for r in res_list:
+        print(r)
+    return res_list
+
+
+
+
+
+
 
 
 

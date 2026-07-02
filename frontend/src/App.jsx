@@ -2,27 +2,32 @@ import { useState, useEffect } from 'react'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import GISMap from './pages/GISMap'
+import GISListView from './pages/GISListView'
 import Workflow from './pages/Workflow'
 import UsersRoles from './pages/UsersRoles'
 import PublicPortal from './pages/PublicPortal'
+import PropertyRecords, { ReportsPage as PropertyReportsPage } from './pages/PropertyRecords'
+import ReservationReports from './pages/ReservationReports'
 import { getPendingWorkOrdersCount } from './api'
 import './App.css'
 
 const FRAPPE_BASE = ''
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', icon: '⊞' },
-  { id: 'map',       label: 'GIS Map',   icon: '🗺' },
-  { id: 'live_map',  label: 'Live Project', icon: '🔴' },
-  { id: 'workflow',  label: 'Workflow',  icon: '☰' },
-  { id: 'users',     label: 'Users & Roles', icon: '👤' },
-  { id: 'settings',  label: 'Settings',  icon: '⚙' },
+  { id: 'dashboard',       label: 'Dashboard',          icon: '⊞' },
+  { id: 'map',             label: 'Reservation',        icon: '🗺' },
+  { id: 'property_records',label: 'Property Records',  icon: '🏛' },
+  { id: 'workflow',        label: 'Workflow',           icon: '☰' },
+  { id: 'users',           label: 'Users & Roles',      icon: '👤' },
+  { id: 'settings',        label: 'Settings',           icon: '⚙' },
 ]
 
 export default function App() {
   const [view, setView] = useState('loading')
   const [userInfo, setUserInfo] = useState(null)
   const [activePage, setActivePage] = useState(() => localStorage.getItem('gis_activePage') || 'dashboard')
+  const [propertySubPage, setPropertySubPage] = useState('records')
+  const [mapSubPage, setMapSubPage] = useState('map_view')
   const [requestTrigger, setRequestTrigger] = useState(0)
   const [notificationCount, setNotificationCount] = useState(0)
   const [liveFilterActive, setLiveFilterActive] = useState(false)
@@ -121,12 +126,45 @@ export default function App() {
   // Internal portal with sidebar
   const renderPage = () => {
     switch (activePage) {
-      case 'dashboard': return <Dashboard userInfo={userInfo} onNavigate={setActivePage} />
-      case 'map':       return <GISMap userInfo={userInfo} requestTrigger={requestTrigger} liveFilterActive={liveFilterActive} setLiveFilterActive={setLiveFilterActive} />
-      case 'workflow':  return <Workflow userInfo={userInfo} />
-      case 'users':     return <UsersRoles userInfo={userInfo} />
-      case 'settings':  return <div style={{ padding: '32px', color: '#555' }}>Settings — Coming Soon</div>
-      default:          return <Dashboard userInfo={userInfo} onNavigate={setActivePage} />
+      case 'dashboard':        return <Dashboard userInfo={userInfo} onNavigate={setActivePage} />
+      case 'map':
+        if (mapSubPage === 'list_view') {
+          return <GISListView userInfo={userInfo} onNavigate={(page) => { setActivePage(page); setMapSubPage('map_view'); }} />
+        }
+        if (mapSubPage === 'live_project') {
+          return <GISMap userInfo={userInfo} requestTrigger={requestTrigger} liveFilterActive={true} setLiveFilterActive={setLiveFilterActive} />
+        }
+        if (mapSubPage === 'reports') {
+          return <ReservationReports />
+        }
+        return <GISMap userInfo={userInfo} requestTrigger={requestTrigger} liveFilterActive={false} setLiveFilterActive={setLiveFilterActive} />
+      case 'workflow':         return <Workflow userInfo={userInfo} onNavigate={setActivePage} />
+      case 'users':            return <UsersRoles userInfo={userInfo} />
+      case 'property_records': return <PropertyRecords userInfo={userInfo} subPage={propertySubPage} setSubPage={setPropertySubPage} />
+      case 'settings':         return <div style={{ padding: '32px', color: '#555' }}>Settings — Coming Soon</div>
+      default:                 return <Dashboard userInfo={userInfo} onNavigate={setActivePage} />
+    }
+  }
+
+  const getNavbarTitle = () => {
+    switch (activePage) {
+      case 'dashboard':        return 'Dashboard';
+      case 'workflow':         return 'Workflow';
+      case 'users':            return 'Users & Roles';
+      case 'settings':         return 'Settings';
+      case 'map':
+        if (mapSubPage === 'map_view') return 'Map View';
+        if (mapSubPage === 'list_view') return 'List View';
+        if (mapSubPage === 'live_project') return 'Live Project';
+        if (mapSubPage === 'reports') return 'Reports';
+        return 'Reservation';
+      case 'property_records':
+        if (propertySubPage === 'survey') return 'Property Survey';
+        if (propertySubPage === 'billing') return 'Property Billing';
+        if (propertySubPage === 'reports') return 'Property Reports';
+        return 'Property Records';
+      default:
+        return activePage;
     }
   }
 
@@ -169,39 +207,117 @@ export default function App() {
         {/* Nav items */}
         <nav style={{ flex: 1, padding: '4px 8px' }}>
           {NAV_ITEMS.map(item => {
-            const isActive = item.id === 'map' 
-              ? (activePage === 'map' && !liveFilterActive)
-              : item.id === 'live_map'
-                ? (activePage === 'map' && liveFilterActive)
-                : (activePage === item.id);
+            const isActive = activePage === item.id;
+
+            const isPropertyRecords = item.id === 'property_records';
+            const isGISMap = item.id === 'map';
+
+            const PROP_SUB = [
+              { id: 'survey',  label: 'Survey',  letter: 'S' },
+              { id: 'billing', label: 'Billing', letter: 'B' },
+              { id: 'reports', label: 'Reports', letter: 'R' },
+            ];
+
+            const MAP_SUB = [
+              { id: 'map_view',     label: 'Map View',     letter: 'M' },
+              { id: 'list_view',    label: 'List View',    letter: 'L' },
+              { id: 'live_project', label: 'Live Project', letter: '🔴' },
+              { id: 'reports',      label: 'Reports',      letter: 'R' },
+            ];
                 
             return (
-              <button 
-                key={item.id} 
-                onClick={() => {
-                  if (item.id === 'map') {
-                    setActivePage('map');
-                    setLiveFilterActive(false);
-                  } else if (item.id === 'live_map') {
-                    setActivePage('map');
-                    setLiveFilterActive(true);
-                  } else {
-                    setActivePage(item.id);
-                  }
-                }} 
-                style={{
-                  width: '100%', padding: '10px 12px', marginBottom: '2px',
-                  background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
-                  color: isActive ? 'white' : 'rgba(255,255,255,0.6)',
-                  border: 'none', borderRadius: '8px', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', gap: '10px',
-                  fontSize: '13px', fontWeight: isActive ? 600 : 400,
-                  textAlign: 'left',
-                }}
-              >
-                <span style={{ fontSize: '15px', width: '18px', textAlign: 'center' }}>{item.icon}</span>
-                {item.label}
-              </button>
+              <div key={item.id}>
+                {/* Main navigation item - directly changes page */}
+                <button 
+                  onClick={() => {
+                    if (item.id === 'map') {
+                      setActivePage('map');
+                      setMapSubPage('map_view'); // Default to Map View
+                    } else if (item.id === 'property_records') {
+                      setActivePage('property_records');
+                      setPropertySubPage('records'); // Reset to default Dashboard view
+                    } else {
+                      setActivePage(item.id);
+                    }
+                  }} 
+                  style={{
+                    width: '100%', padding: '10px 12px', marginBottom: '2px',
+                    background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
+                    color: isActive ? 'white' : 'rgba(255,255,255,0.6)',
+                    border: 'none', borderRadius: '8px', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    fontSize: '13px', fontWeight: isActive ? 600 : 400,
+                    textAlign: 'left',
+                  }}
+                >
+                  <span style={{ fontSize: '15px', width: '18px', textAlign: 'center' }}>{item.icon}</span>
+                  {item.label}
+                </button>
+
+                {/* Sub-nav for GIS Map - separate from main nav toggle */}
+                {isGISMap && (
+                  <div style={{ marginLeft: '12px', marginBottom: '4px', borderLeft: '2px solid rgba(255,255,255,0.1)', paddingLeft: '8px' }}>
+                    {MAP_SUB.map(sub => {
+                      const isSubActive = mapSubPage === sub.id;
+                      return (
+                        <button
+                          key={sub.id}
+                          onClick={() => { setActivePage('map'); setMapSubPage(sub.id); }}
+                          style={{
+                            width: '100%', padding: '8px 10px', marginBottom: '1px',
+                            background: isSubActive ? 'rgba(37,99,235,0.35)' : 'transparent',
+                            color: isSubActive ? 'white' : 'rgba(255,255,255,0.55)',
+                            border: 'none', borderRadius: '7px', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: '10px',
+                            fontSize: '12px', fontWeight: isSubActive ? 700 : 400,
+                            textAlign: 'left',
+                          }}
+                        >
+                          <span style={{
+                            width: '20px', height: '20px', borderRadius: '5px',
+                            background: isSubActive ? '#2563eb' : 'rgba(255,255,255,0.1)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '10px', fontWeight: 800, color: 'white', flexShrink: 0
+                          }}>{sub.letter}</span>
+                          {sub.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Sub-nav for Property Records - separate from main nav toggle */}
+                {isPropertyRecords && (
+                  <div style={{ marginLeft: '12px', marginBottom: '4px', borderLeft: '2px solid rgba(255,255,255,0.1)', paddingLeft: '8px' }}>
+                    {PROP_SUB.map(sub => {
+                      const isSubActive = propertySubPage === sub.id;
+                      return (
+                        <button
+                          key={sub.id}
+                          onClick={() => { setActivePage('property_records'); setPropertySubPage(sub.id); }}
+                          style={{
+                            width: '100%', padding: '8px 10px', marginBottom: '1px',
+                            background: isSubActive ? 'rgba(37,99,235,0.35)' : 'transparent',
+                            color: isSubActive ? 'white' : 'rgba(255,255,255,0.55)',
+                            border: 'none', borderRadius: '7px', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: '10px',
+                            fontSize: '12px', fontWeight: isSubActive ? 700 : 400,
+                            textAlign: 'left',
+                          }}
+                        >
+                          <span style={{
+                            width: '20px', height: '20px', borderRadius: '5px',
+                            background: isSubActive ? '#2563eb' : 'rgba(255,255,255,0.1)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '10px', fontWeight: 800, color: 'white', flexShrink: 0
+                          }}>{sub.letter}</span>
+                          {sub.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </nav>
@@ -234,8 +350,8 @@ export default function App() {
       <div style={{ flex: 1, overflow: 'hidden', background: '#f4f6f9', display: 'flex', flexDirection: 'column' }}>
         {/* Top Header */}
         <div style={{ height: '56px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px', flexShrink: 0 }}>
-          <div style={{ fontSize: '15px', fontWeight: 600, color: '#1e293b', textTransform: 'capitalize' }}>
-            {activePage === 'map' ? (liveFilterActive ? 'Live Projects Map' : 'GIS Map') : activePage}
+          <div style={{ fontSize: '15px', fontWeight: 600, color: '#1e293b' }}>
+            {getNavbarTitle()}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             {/* Bell Icon Notification */}

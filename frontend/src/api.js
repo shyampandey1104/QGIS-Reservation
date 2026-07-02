@@ -1,18 +1,64 @@
 const FRAPPE_BASE = ''
 const API = `${FRAPPE_BASE}/api/method/qgis.api.gis_project`
 
+async function ensureCsrfToken() {
+  if (window.csrf_token && window.csrf_token !== 'fetch') return
+  try {
+    const res = await fetch(`${FRAPPE_BASE}/api/method/qgis.api.gis_project.get_csrf_token_api`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'include'
+    })
+    const data = await res.json()
+    if (data.message) {
+      window.csrf_token = data.message
+    }
+  } catch (e) {
+    console.error("Failed to fetch CSRF token", e)
+  }
+}
+
 async function call(method, params = {}) {
-  const headers = { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' }
-  const res = await fetch(`${API}.${method}`, {
+  await ensureCsrfToken()
+  const headers = { 
+    'Content-Type': 'application/json', 
+    'X-Frappe-CSRF-Token': window.csrf_token || 'fetch' 
+  }
+  let res = await fetch(`${API}.${method}`, {
     method: 'POST',
     headers,
     credentials: 'include',
     body: JSON.stringify(params),
   })
+  
   // Always capture new CSRF token if server returns one
-  const newToken = res.headers.get('x-frappe-csrf-token')
+  let newToken = res.headers.get('x-frappe-csrf-token')
   if (newToken) window.csrf_token = newToken
-  const data = await res.json()
+  
+  let data = await res.json()
+  
+  // Self-healing: If CSRFTokenError, fetch a new token and retry once
+  if (!res.ok && data.exception && data.exception.includes("CSRFTokenError")) {
+    console.warn("CSRF token expired or invalid, retrying...")
+    window.csrf_token = null
+    await ensureCsrfToken()
+    
+    const retryHeaders = {
+      'Content-Type': 'application/json',
+      'X-Frappe-CSRF-Token': window.csrf_token || 'fetch'
+    }
+    res = await fetch(`${API}.${method}`, {
+      method: 'POST',
+      headers: retryHeaders,
+      credentials: 'include',
+      body: JSON.stringify(params),
+    })
+    
+    newToken = res.headers.get('x-frappe-csrf-token')
+    if (newToken) window.csrf_token = newToken
+    data = await res.json()
+  }
+  
   if (data.exc) throw new Error(data.exc_type || 'Server error')
   if (!res.ok) throw new Error(data.message || 'Request failed')
   return data.message
@@ -103,22 +149,43 @@ export async function manualUpload(file) {
   const data = await res.json()
   if (data.exc) throw new Error(data.exc_type || 'Server error')
   if (!res.ok) throw new Error(data.message || 'Request failed')
+  // Returns { success, job_id, status, message } — background processing
   return data.message
+}
+
+export async function pollUploadJob(jobId) {
+  return call('get_upload_job_status', { job_id: jobId })
 }
 
 export function updateCustomAttributes(id, attributes) {
   return call('update_custom_attributes', { project_id: id, custom_attributes: attributes })
 }
 
-export async function submitWorkOrder(projectId, comment, file, approver) {
+export function checkFilesExist(paths) {
+  return call('check_files_exist', { paths: JSON.stringify(paths) })
+}
+
+export async function submitWorkOrder(projectId, comment, file, approver, description, estimatedCost, estimatedDuration, tentativeStartDate) {
   const formData = new FormData()
   formData.append('project_id', projectId)
-  formData.append('comment', comment)
+  formData.append('comment', comment || '')
   if (approver) {
     formData.append('approver', approver)
   }
   if (file) {
     formData.append('file', file)
+  }
+  if (description) {
+    formData.append('description', description)
+  }
+  if (estimatedCost) {
+    formData.append('estimated_cost', estimatedCost)
+  }
+  if (estimatedDuration) {
+    formData.append('estimated_duration', estimatedDuration)
+  }
+  if (tentativeStartDate) {
+    formData.append('tentative_start_date', tentativeStartDate)
   }
 
   const res = await fetch(`${API}.submit_work_order`, {
@@ -178,5 +245,79 @@ export function createCategory(data) {
     fill: data.fill ? 1 : 0,
     weight: data.weight || 3
   })
+}
+
+export function fetchGisUsersAndRoles() {
+  return call('get_gis_users_and_roles')
+}
+
+export function createGisUser(data) {
+  return call('create_gis_user', {
+    email: data.email,
+    first_name: data.first_name,
+    last_name: data.last_name,
+    roles: data.roles,
+    ward_access: data.ward_access,
+    password: data.password
+  })
+}
+
+export function updateGisUser(data) {
+  return call('update_gis_user', {
+    email: data.email,
+    first_name: data.first_name,
+    last_name: data.last_name,
+    roles: data.roles,
+    ward_access: data.ward_access,
+    enabled: data.enabled ? 1 : 0
+  })
+}
+
+export function deleteGisUser(email) {
+  return call('delete_gis_user', { email })
+}
+
+export function updateGisRolePermissions(permissions) {
+  return call('update_gis_role_permissions', { permissions })
+}
+
+export function createGisRole(roleName) {
+  return call('create_gis_role', { role_name: roleName })
+}
+
+export function fetchUserPermissions(email) {
+  return call('get_user_permissions', { user: email })
+}
+
+export function addUserPermission(data) {
+  return call('add_user_permission', {
+    user: data.user,
+    allow: data.allow,
+    for_value: data.for_value
+  })
+}
+
+export function deleteUserPermission(name) {
+  return call('delete_user_permission', { name })
+}
+
+export function savePropertySurvey(data) {
+  return call('save_property_survey', { data: JSON.stringify(data) })
+}
+
+export function fetchPropertySurveys() {
+  return call('get_property_surveys')
+}
+
+export function registerTenant(data) {
+  return call('register_tenant', data)
+}
+
+export function fetchRegisteredTenants(propertyId) {
+  return call('get_registered_tenants', { property_id: propertyId })
+}
+
+export function fetchAllRegisteredTenants() {
+  return call('get_all_registered_tenants')
 }
 

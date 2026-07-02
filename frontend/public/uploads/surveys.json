@@ -1,0 +1,11 @@
+[
+  {
+    "data": "{\"property_id\":\"\",\"category\":\"Corporation Owned & Rented\",\"property_type\":\"Commercial Shop\",\"plot_area\":\"345\",\"constructed_area\":\"\",\"carpet_area\":\"34\",\"existing_usage\":\"Residential\",\"address\":\"33\",\"geo_location\":\"[[19.297372509007612,72.85892486572267],[19.298506622485558,72.8657913208008],[19.29372709102151,72.86167144775392]]\",\"tenant_name\":\"Test\",\"contact\":\"\",\"rental_period\":\"\",\"documents\":\"\",\"status\":\"Submitted\"}"
+  },
+  {
+    "property_id": "PROP-TEST",
+    "property_type": "Corporation Owned",
+    "plot_area": "100",
+    "status": "Draft"
+  }
+]

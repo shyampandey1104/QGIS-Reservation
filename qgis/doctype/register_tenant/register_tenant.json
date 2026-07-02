@@ -1,0 +1,120 @@
+{
+ "actions": [],
+ "autoname": "TENANT-.#####",
+ "creation": "2025-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "tenant_name",
+  "profession",
+  "purpose_of_use",
+  "contact_information",
+  "rental_period",
+  "aadhar_number",
+  "gst_number",
+  "pan_card_number",
+  "rent_amount",
+  "renewal_date",
+  "property_id",
+  "status",
+  "attachments"
+ ],
+ "fields": [
+  {
+   "fieldname": "tenant_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Tenant Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "profession",
+   "fieldtype": "Data",
+   "label": "Profession"
+  },
+  {
+   "fieldname": "purpose_of_use",
+   "fieldtype": "Data",
+   "label": "Purpose of Use"
+  },
+  {
+   "fieldname": "contact_information",
+   "fieldtype": "Data",
+   "label": "Contact Information"
+  },
+  {
+   "fieldname": "rental_period",
+   "fieldtype": "Data",
+   "label": "Rental Period"
+  },
+  {
+   "fieldname": "aadhar_number",
+   "fieldtype": "Data",
+   "label": "Aadhar Number"
+  },
+  {
+   "fieldname": "gst_number",
+   "fieldtype": "Data",
+   "label": "GST Number"
+  },
+  {
+   "fieldname": "pan_card_number",
+   "fieldtype": "Data",
+   "label": "PAN Card Number"
+  },
+  {
+   "fieldname": "rent_amount",
+   "fieldtype": "Currency",
+   "label": "Rent Amount"
+  },
+  {
+   "fieldname": "renewal_date",
+   "fieldtype": "Data",
+   "label": "Renewal Date"
+  },
+  {
+   "fieldname": "property_id",
+   "fieldtype": "Data",
+   "label": "Property ID",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "options": "Draft\nActive\nInactive",
+   "default": "Draft",
+   "label": "Status",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "attachments",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Attachments"
+  }
+ ],
+ "links": [],
+ "modified": "2025-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "QGIS",
+ "name": "Register Tenant",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "import": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "states": []
+}
