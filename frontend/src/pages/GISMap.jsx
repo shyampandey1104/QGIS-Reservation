@@ -961,7 +961,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
             else if (st === 'Pending for Request') color = '#ea580c';
             else if (st === 'Submitted') color = '#2563eb';
             else if (st === 'Correction') color = '#e11d48';
-            else if (st === 'Draft') color = '#64748b';
+            else if (st === 'Draft') color = selectedProject.type === 'MBMC-RESERVSTION' ? (meta.color || '#00e5ff') : '#64748b';
             else if (st === 'Rejected') color = '#dc2626';
             else color = selectedProject.color || meta.color || '#1a73e8';
           }
@@ -2035,11 +2035,11 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         } else if (p.status === 'Correction') {
           color = '#e11d48' // Rose/Red
         } else if (p.status === 'Draft') {
-          color = '#64748b' // Slate/Gray
+          color = p.type === 'MBMC-RESERVSTION' ? defaultColor : '#64748b' // Cyan for reservations, Slate/Gray for others
         } else if (p.status === 'Rejected') {
           color = '#dc2626' // Red
         }
-        fillOpacity = 0.45
+        fillOpacity = (p.type === 'MBMC-RESERVSTION' && p.status === 'Draft') ? metaFillOpacity : 0.45
       }
       let layer;
       if (!p.coordinates || p.coordinates.length === 0) return;
@@ -2606,7 +2606,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                   else if (st === 'Pending for Request') color = '#ea580c';
                   else if (st === 'Submitted') color = '#2563eb';
                   else if (st === 'Correction') color = '#e11d48';
-                  else if (st === 'Draft') color = '#64748b';
+                  else if (st === 'Draft') color = selectedProject.type === 'MBMC-RESERVSTION' ? '#00e5ff' : '#64748b';
                   else if (st === 'Rejected') color = '#dc2626';
                   else if (selectedProject.type?.startsWith('MBMC-RESERVSTION')) color = '#06b6d4';
                 }
