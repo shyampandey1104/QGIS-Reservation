@@ -570,15 +570,20 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
   const drawnLayersRef = useRef(null)
   const drawControlRef = useRef(null)
   const categoryGroupsRef = useRef({}) // Store groups by type: { 'Road': L.FeatureGroup, ... }
+  const renderCancelRef = useRef(null)  // Cancel in-flight chunked layer rendering
   const mapClickHandledRef = useRef(false)
 
+
   const [projects, setProjects] = useState(() => {
-    const cached = localStorage.getItem('gis_projects_light');
+    const cached = localStorage.getItem('gis_projects_cache');
     if (cached) {
       try { return JSON.parse(cached); } catch(e) {}
     }
     return [];
   })
+  const hasCachedProjects = !!(() => { try { return localStorage.getItem('gis_projects_cache'); } catch(e) { return null; } })()
+  const [layersLoading, setLayersLoading] = useState(!hasCachedProjects)
+  const [layersSilentRefresh, setLayersSilentRefresh] = useState(false)
   const [showLayers, setShowLayers] = useState(true)
   const [mapMode, setMapMode] = useState('satellite')
   const [layerVisibility, setLayerVisibility] = useState(() => {
@@ -669,6 +674,41 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
   const [newTimelineImages, setNewTimelineImages] = useState([])
   const [selectedJourneyStep, setSelectedJourneyStep] = useState(null)
   const [previewFile, setPreviewFile] = useState(null)
+  const [previewFileStatus, setPreviewFileStatus] = useState('loading')
+
+  useEffect(() => {
+    if (!previewFile) {
+      setPreviewFileStatus('loading');
+      return;
+    }
+    const url = previewFile.url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      setPreviewFileStatus('exists');
+      return;
+    }
+    setPreviewFileStatus('loading');
+    fetch(url, { method: 'HEAD' })
+      .then(res => {
+        if (res.ok) {
+          setPreviewFileStatus('exists');
+        } else {
+          setPreviewFileStatus('missing');
+        }
+      })
+      .catch(() => {
+        fetch(url)
+          .then(res => {
+            if (res.ok) {
+              setPreviewFileStatus('exists');
+            } else {
+              setPreviewFileStatus('missing');
+            }
+          })
+          .catch(() => {
+            setPreviewFileStatus('exists');
+          });
+      });
+  }, [previewFile]);
   // Filter States
   const [showFilterPanel, setShowFilterPanel] = useState(false)
   const [selectedResNames, setSelectedResNames] = useState([])
@@ -1615,8 +1655,15 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
     return types;
   }, [projects, liveFilterActive])
 
-  const loadProjects = async (overrideStatus) => {
+  const loadProjects = async (overrideStatus, silent = false) => {
     const statusToFetch = overrideStatus !== undefined ? overrideStatus : activeStatusFilter;
+    // If we have cached data and this is the initial load, show silent refresh badge instead of full loader
+    const hasCached = projects.length > 0;
+    if (silent || hasCached) {
+      setLayersSilentRefresh(true);
+    } else {
+      setLayersLoading(true);
+    }
     try {
       // Fetch full projects with geometry to draw on map (only one setProjects call = no flash)
       const data = await fetchProjects(statusToFetch)
@@ -1628,6 +1675,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         return { ...p, coordinates: cleanCoords(coords) }
       }).filter(p => p.coordinates)
       
+      // Cache the fresh data
+      try { localStorage.setItem('gis_projects_cache', JSON.stringify(parsedData)); } catch(e) {}
       setProjects(parsedData);
 
       const selId = localStorage.getItem('gis_selected_project_id');
@@ -1638,12 +1687,17 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
           openProjectDetails(found);
         }
       }
-    } catch (e) { console.error(e) }
+    } catch (e) { console.error(e) } finally {
+      setLayersLoading(false);
+      setLayersSilentRefresh(false);
+    }
   }
 
   useEffect(() => {
     loadCategories()
-    loadProjects()
+    // If cached data exists, load silently (don't block the map with a full-screen loader)
+    const hasCached = !!localStorage.getItem('gis_projects_cache');
+    loadProjects(undefined, hasCached)
   }, [])
 
   useEffect(() => {
@@ -1913,25 +1967,24 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
     categoryGroupsRef.current = {}
 
     if (projects.length === 0) return;
-    categoryGroupsRef.current = {}
 
-    // 2. Create new groups for each project type
-    // Layer z-order: render MBMC-RESERVSTION last so it's on top (clickable over VILLAGE-BOUNDARY)
-    const TYPE_Z = {
-      'MBMC-VILLAGE-BOUNDARY': 1,
-      'MBMC-VILLAGES-SURVEY_No._BOUNDARY': 2,
-      'MBMC-ROAD': 3,
-      'MBMC-ROAD_CENTER_LINE': 4,
-      'MBMC-RESERVSTION-BOUNDARY': 8,
-      'MBMC-RESERVSTION': 10,  // ← highest: always clickable on top
-    };
+    // Filter projects
     const sortedProjects = [...projects].sort((a, b) => {
+      const TYPE_Z = {
+        'MBMC-VILLAGE-BOUNDARY': 1,
+        'MBMC-VILLAGES-SURVEY_No._BOUNDARY': 2,
+        'MBMC-ROAD': 3,
+        'MBMC-ROAD_CENTER_LINE': 4,
+        'MBMC-RESERVSTION-BOUNDARY': 8,
+        'MBMC-RESERVSTION': 10,
+      };
       const za = TYPE_Z[a.type] || 5;
       const zb = TYPE_Z[b.type] || 5;
-      if (za !== zb) return za - zb;  // lower z rendered first (= underneath)
+      if (za !== zb) return za - zb;
       const score = { 'Draft': 1, 'Correction': 2, 'Pending for Request': 3, 'Submitted': 4, 'Approved': 5 };
       return (score[a.status] || 0) - (score[b.status] || 0);
     });
+
     const filteredProjects = sortedProjects.filter(p => {
       let attrs = {};
       if (p.custom_attributes) {
@@ -1940,32 +1993,23 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         } catch(e) {}
       }
 
-      // 1. Text Search Filter (applies to project name, reservation name, survey numbers, etc.)
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const matchesProjName = (p.project_name || p.name || '').toLowerCase().includes(q);
         const matchesResName = (attrs['Reservation Name'] || '').toLowerCase().includes(q);
         const matchesResId = (attrs['RESERVATIO'] || '').toLowerCase().includes(q);
         const matchesSurveyNo = (attrs['Old Survey No_Hissa No'] || '').toLowerCase().includes(q) || (attrs['New Survey No_Hissa No'] || '').toLowerCase().includes(q);
-        if (!matchesProjName && !matchesResName && !matchesResId && !matchesSurveyNo) {
-          return false;
-        }
+        if (!matchesProjName && !matchesResName && !matchesResId && !matchesSurveyNo) return false;
       }
 
-      // Apply filters globally to all features (from any layer) when active
-      // 2. Reservation Name Filter (multiselect filter)
       if (selectedResNames && selectedResNames.length > 0) {
         const resName = attrs['Reservation Name'] || attrs['RES_NAME'] || '';
         if (!selectedResNames.some(selectedName => resName.toLowerCase() === selectedName.toLowerCase())) return false;
       }
-
-      // Reservation Number Filter (multiselect filter)
       if (selectedResNumbers && selectedResNumbers.length > 0) {
         const resNo = attrs['Reservation Number'] || p.reservation_number || '';
         if (!selectedResNumbers.some(selectedNum => String(resNo).toLowerCase() === String(selectedNum).toLowerCase())) return false;
       }
-
-      // Survey Number Filter (multiselect filter)
       if (selectedSurveyNos && selectedSurveyNos.length > 0) {
         const oldSurvey = attrs['Old Survey No_Hissa No'] || attrs['Old Survey No / Hissa No'] || '';
         const newSurvey = attrs['New Survey No_Hissa No'] || attrs['New Survey No / Hissa No'] || '';
@@ -1978,11 +2022,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         });
         if (!matched) return false;
       }
-
-      // 3. Village Name Filter
       if (filterVillage && filterVillage !== 'All') {
         const village = attrs['Village Name'] || attrs['VILLAGE_NA'] || '';
-        // If it's a survey boundary, extract village name prefix (e.g. "GHODBUNDAR_95" -> "GHODBUNDAR")
         let projVillage = village;
         if (!projVillage && attrs['SURVEY_No.']) {
           const parts = String(attrs['SURVEY_No.']).split('_');
@@ -1990,55 +2031,39 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         }
         if (projVillage.toLowerCase() !== filterVillage.toLowerCase()) return false;
       }
-
-      // 4. Land Acquired Status Filter
       if (filterLandAcquired && filterLandAcquired !== 'All') {
         const status = attrs['LAND ACQUIRED STATUS'] || '';
         if (status !== filterLandAcquired) return false;
       }
-
-      // 5. MBMC 7/12 Filter
       if (filterMbmc712 && filterMbmc712 !== 'All') {
         const mbmc712 = attrs['MBMC 7_12'] || '';
         if (mbmc712 !== filterMbmc712) return false;
       }
-
-      // 6. CZMP Affected Area Filter
       if (filterCzmp && filterCzmp !== 'All') {
         const czmp = attrs['2019_FORMAT_CZMP_AFFECTED_AREA'] || '';
         if (czmp !== filterCzmp) return false;
       }
-
-      // 7. Encroachment Status Filter
       if (filterEncroachment && filterEncroachment !== 'All') {
         const encroachment = attrs['ENCROACHMENT_STATUS'] || '';
         if (encroachment !== filterEncroachment) return false;
       }
-
       return true;
     });
 
-    // Store filtered data for Excel export
     filteredDataRef.current = filteredProjects;
     setFilteredCount(filteredProjects.length);
 
     const seenResLabels = new Set();
 
-    filteredProjects.forEach(p => {
-      if (!categoryGroupsRef.current[p.type]) {
-        categoryGroupsRef.current[p.type] = L.featureGroup()
-      }
-
+    // ── Helper: build one Leaflet layer for a project entry ──────────────────
+    const buildLayer = (p) => {
       // Get layer meta configuration
       const meta = layerMetaLookup[p.type] || LAYER_META[p.type] || {}
       const defaultColor = meta.color || '#1a73e8'
       const shouldFill = meta.fill !== false
-      // Use custom fillOpacity from meta if provided (e.g. for MBMC layers)
       const metaFillOpacity = meta.fillOpacity !== undefined ? meta.fillOpacity : 0.25
       const layerWeight = meta.weight !== undefined ? meta.weight : (p.geom_type?.toLowerCase().includes('line') ? 5 : 3)
 
-      // Reference/base-map layer types: always use LAYER_META color, ignore DB stored color
-      // (DB may have wrong default color #2563eb from initial import)
       const isReferenceLayers = p.type && (
         p.type.startsWith('MBMC-') ||
         p.type.startsWith('VVCM') ||
@@ -2048,40 +2073,35 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
       );
 
       if (liveFilterActive) {
-        // Skip all reference layers except reservation
-        if (isReferenceLayers && p.type !== 'MBMC-RESERVSTION') {
-          return;
-        }
-        // Only show green status projects/reservations
+        if (isReferenceLayers && p.type !== 'MBMC-RESERVSTION') return null;
         const isGreenStatus = p.status && ['Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion', 'Completed'].includes(p.status);
-        if (!isGreenStatus) {
-          return;
-        }
+        if (!isGreenStatus) return null;
       }
 
-      // For reference layers (except reservations) use meta color; for user-drawn projects / reservations use status-based color
       const isProjectOrReservation = !isReferenceLayers || p.type === 'MBMC-RESERVSTION';
       let color = (isReferenceLayers && p.type !== 'MBMC-RESERVSTION') ? defaultColor : (p.color || defaultColor)
       let fillOpacity = metaFillOpacity
 
       if (isProjectOrReservation && p.status) {
         if (['Approved', 'Work Started', 'Ongoing', 'On Hold', 'Hold', 'Near Completion', 'Completed'].includes(p.status)) {
-          color = '#16a34a' // Green
+          color = '#16a34a'
         } else if (p.status === 'Pending for Request') {
-          color = '#ea580c' // Orange
+          color = '#ea580c'
         } else if (p.status === 'Submitted') {
-          color = '#2563eb' // Blue
+          color = '#2563eb'
         } else if (p.status === 'Correction') {
-          color = '#e11d48' // Rose/Red
+          color = '#e11d48'
         } else if (p.status === 'Draft') {
-          color = p.type === 'MBMC-RESERVSTION' ? defaultColor : '#64748b' // Cyan for reservations, Slate/Gray for others
+          color = p.type === 'MBMC-RESERVSTION' ? defaultColor : '#64748b'
         } else if (p.status === 'Rejected') {
-          color = '#dc2626' // Red
+          color = '#dc2626'
         }
         fillOpacity = (p.type === 'MBMC-RESERVSTION' && p.status === 'Draft') ? metaFillOpacity : 0.45
       }
+
+      if (!p.coordinates || p.coordinates.length === 0) return null;
+
       let layer;
-      if (!p.coordinates || p.coordinates.length === 0) return;
       try {
         if (p.geom_type?.toLowerCase().includes('point')) {
           const pt = typeof p.coordinates[0] === 'number' ? p.coordinates : p.coordinates[0];
@@ -2089,7 +2109,6 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
         } else if (p.geom_type?.toLowerCase().includes('line') || p.geom_type?.toLowerCase().includes('string')) {
           layer = L.polyline(p.coordinates, { color, weight: layerWeight, opacity: 0.85 })
         } else {
-          // Assign to the correct pane for precise z-order control
           const PANE_MAP = {
             'MBMC-VILLAGE-BOUNDARY':            'pane-village',
             'MBMC-VILLAGES-SURVEY_No._BOUNDARY': 'pane-survey',
@@ -2110,125 +2129,143 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
             ...(featurePane ? { pane: featurePane } : {})
           })
         }
+      } catch(e) { return null; }
 
-        layer.projectId = p.id
-        
-        let displayName = p.name;
-        if (p.custom_attributes) {
-          try {
-            const attrs = typeof p.custom_attributes === 'string' ? JSON.parse(p.custom_attributes) : p.custom_attributes;
+      layer.projectId = p.id
 
-            const isReservationNum = p.type === 'MBMC-RESERVSTION' || p.type === 'MBMC-RESERVSTION-BOUNDARY';
-            if (isReservationNum) {
-              const resNum = attrs['Reservation Number'] || attrs['RES_NUMBER'] || attrs['Reservation Number_doc'] || attrs['RES_CODE'] || attrs['RESERVATIO'] || attrs['GIS ID'] || '';
-              const newSurvey = attrs['New Survey No_Hissa No'] || attrs['New Survey No / Hissa No'] || attrs['New Survey No'] || '';
-              if (resNum) {
-                let cleanRes = String(resNum).trim();
-                if (cleanRes.includes('_')) {
-                  const parts = cleanRes.split('_');
-                  if (parts[0] && /\d/.test(parts[0])) {
-                    cleanRes = parts[0].trim();
-                  }
-                }
-                displayName = cleanRes;
-                if (newSurvey) {
-                  displayName = `${cleanRes} <span style="color: #1e293b; font-weight: 700; font-size: 10px; margin-left: 3px;">(${newSurvey})</span>`;
-                }
+      let displayName = p.name;
+      if (p.custom_attributes) {
+        try {
+          const attrs = typeof p.custom_attributes === 'string' ? JSON.parse(p.custom_attributes) : p.custom_attributes;
+          const isReservationNum = p.type === 'MBMC-RESERVSTION' || p.type === 'MBMC-RESERVSTION-BOUNDARY';
+          if (isReservationNum) {
+            const resNum = attrs['Reservation Number'] || attrs['RES_NUMBER'] || attrs['Reservation Number_doc'] || attrs['RES_CODE'] || attrs['RESERVATIO'] || attrs['GIS ID'] || '';
+            const newSurvey = attrs['New Survey No_Hissa No'] || attrs['New Survey No / Hissa No'] || attrs['New Survey No'] || '';
+            if (resNum) {
+              let cleanRes = String(resNum).trim();
+              if (cleanRes.includes('_')) {
+                const parts = cleanRes.split('_');
+                if (parts[0] && /\d/.test(parts[0])) cleanRes = parts[0].trim();
               }
-            } else if (p.type === 'BUILDING_INFO' || p.type === 'building_info') {
-              const bldgId = attrs['BUILDING I'] || attrs['Text'] || attrs['BUILDING N'] || '';
-              if (bldgId) {
-                displayName = String(bldgId).trim();
-              }
-            } else {
-              // Priority order: other layers
-              const mbmcKey = 
-                attrs['Reservation Number'] ? 'Reservation Number' :
-                attrs['Reservation Number_doc'] ? 'Reservation Number_doc' :
-                attrs['RESERVATIO'] ? 'RESERVATIO' :
-                attrs['GIS ID']     ? 'GIS ID'     :
-                attrs['RES_CODE']   ? 'RES_CODE'   :
-                attrs['RES_NAME']   ? 'RES_NAME'   :
-                attrs['SURVEY_No.'] ? 'SURVEY_No.' :
-                attrs['VILLAGE_NA'] ? 'VILLAGE_NA' :
-                null;
-              if (mbmcKey && attrs[mbmcKey]) {
-                displayName = String(attrs[mbmcKey]);
-              } else if (displayName && displayName.includes('Feature ')) {
-                const nameKey = Object.keys(attrs).find(k =>
-                  k.toLowerCase().includes('name') ||
-                  k.toLowerCase().includes('village') ||
-                  k.toLowerCase().includes('survey') ||
-                  k.toLowerCase().includes('ward')
-                );
-                if (nameKey && attrs[nameKey]) {
-                  displayName = String(attrs[nameKey]);
-                }
+              displayName = cleanRes;
+              if (newSurvey) {
+                displayName = `${cleanRes} <span style="color: #1e293b; font-weight: 700; font-size: 10px; margin-left: 3px;">(${newSurvey})</span>`;
               }
             }
-          } catch(e){}
-        }
-
-        if (displayName) {
-          displayName = displayName.replace(/^Feature\s+/i, '');
-        }
-
-        const isVillageLayer = p.type === 'MBMC-VILLAGE-BOUNDARY';
-        const isSurveyLayer  = p.type === 'MBMC-VILLAGES-SURVEY_No._BOUNDARY';
-        const isResLayer     = p.type === 'MBMC-RESERVSTION-BOUNDARY';
-        const isReservationLayer = p.type === 'MBMC-RESERVSTION';
-        const isBuildingLayer = p.type === 'BUILDING_INFO' || p.type === 'building_info';
-        
-        let showPermanentLabel = isVillageLayer || isSurveyLayer || isResLayer || isReservationLayer || isBuildingLayer;
-        if (isResLayer || isReservationLayer) {
-          const labelKey = p.type + '_' + displayName;
-          if (seenResLabels.has(labelKey)) {
-            showPermanentLabel = false;
+          } else if (p.type === 'BUILDING_INFO' || p.type === 'building_info') {
+            const bldgId = attrs['BUILDING I'] || attrs['Text'] || attrs['BUILDING N'] || '';
+            if (bldgId) displayName = String(bldgId).trim();
           } else {
-            seenResLabels.add(labelKey);
+            const mbmcKey =
+              attrs['Reservation Number'] ? 'Reservation Number' :
+              attrs['Reservation Number_doc'] ? 'Reservation Number_doc' :
+              attrs['RESERVATIO'] ? 'RESERVATIO' :
+              attrs['GIS ID']     ? 'GIS ID'     :
+              attrs['RES_CODE']   ? 'RES_CODE'   :
+              attrs['RES_NAME']   ? 'RES_NAME'   :
+              attrs['SURVEY_No.'] ? 'SURVEY_No.' :
+              attrs['VILLAGE_NA'] ? 'VILLAGE_NA' :
+              null;
+            if (mbmcKey && attrs[mbmcKey]) {
+              displayName = String(attrs[mbmcKey]);
+            } else if (displayName && displayName.includes('Feature ')) {
+              const nameKey = Object.keys(attrs).find(k =>
+                k.toLowerCase().includes('name') ||
+                k.toLowerCase().includes('village') ||
+                k.toLowerCase().includes('survey') ||
+                k.toLowerCase().includes('ward')
+              );
+              if (nameKey && attrs[nameKey]) displayName = String(attrs[nameKey]);
+            }
           }
-        } else if (isBuildingLayer) {
-          const labelKey = p.type + '_' + displayName;
-          if (seenResLabels.has(labelKey)) {
-            showPermanentLabel = false;
-          } else {
-            seenResLabels.add(labelKey);
-          }
-        }
-        const labelClass = isVillageLayer      ? 'village-map-label' :
-                           isSurveyLayer       ? 'survey-map-label'  :
-                           isResLayer          ? 'reservation-map-label' :
-                           isReservationLayer  ? 'resnum-map-label' :
-                           isBuildingLayer     ? 'building-map-label' : '';
-
-        layer.bindTooltip(displayName, { 
-          permanent: showPermanentLabel, 
-          sticky: !showPermanentLabel,
-          direction: 'center',
-          className: labelClass
-        }).on('click', (e) => {
-          mapClickHandledRef.current = true;
-          setTimeout(() => { mapClickHandledRef.current = false; }, 50);
-          openProjectDetails(p);
-        })
-
-        categoryGroupsRef.current[p.type].addLayer(layer)
-      } catch (e) { console.error("Layer error:", e) }
-    })
-
-    // 3. Add groups to map in z-order (RESERVSTION added last = on top, so it's clickable)
-    const GROUP_Z = {
-      'MBMC-VILLAGE-BOUNDARY': 1, 'MBMC-VILLAGES-SURVEY_No._BOUNDARY': 2,
-      'MBMC-ROAD': 3, 'MBMC-ROAD_CENTER_LINE': 4,
-      'MBMC-RESERVSTION-BOUNDARY': 8, 'MBMC-RESERVSTION': 10,
-    };
-    const sortedTypes = Object.keys(categoryGroupsRef.current).sort((a, b) => (GROUP_Z[a] || 5) - (GROUP_Z[b] || 5));
-    sortedTypes.forEach(type => {
-      if (isLayerVisible(type)) {
-        mainGroup.addLayer(categoryGroupsRef.current[type])
+        } catch(e){}
       }
-    })
-  }, [projects, searchQuery, selectedResNames, selectedResNumbers, selectedSurveyNos, filterVillage, filterLandAcquired, filterMbmc712, filterCzmp, filterEncroachment]) // Only rebuild when data actually changes
+
+      if (displayName) displayName = displayName.replace(/^Feature\s+/i, '');
+
+      const isVillageLayer    = p.type === 'MBMC-VILLAGE-BOUNDARY';
+      const isSurveyLayer     = p.type === 'MBMC-VILLAGES-SURVEY_No._BOUNDARY';
+      const isResLayer        = p.type === 'MBMC-RESERVSTION-BOUNDARY';
+      const isReservationLayer = p.type === 'MBMC-RESERVSTION';
+      const isBuildingLayer   = p.type === 'BUILDING_INFO' || p.type === 'building_info';
+
+      let showPermanentLabel = isVillageLayer || isSurveyLayer || isResLayer || isReservationLayer || isBuildingLayer;
+      if (isResLayer || isReservationLayer || isBuildingLayer) {
+        const labelKey = p.type + '_' + displayName;
+        if (seenResLabels.has(labelKey)) {
+          showPermanentLabel = false;
+        } else {
+          seenResLabels.add(labelKey);
+        }
+      }
+
+      const labelClass = isVillageLayer      ? 'village-map-label' :
+                         isSurveyLayer       ? 'survey-map-label'  :
+                         isResLayer          ? 'reservation-map-label' :
+                         isReservationLayer  ? 'resnum-map-label' :
+                         isBuildingLayer     ? 'building-map-label' : '';
+
+      layer.bindTooltip(displayName, {
+        permanent: showPermanentLabel,
+        sticky: !showPermanentLabel,
+        direction: 'center',
+        className: labelClass
+      }).on('click', (e) => {
+        mapClickHandledRef.current = true;
+        setTimeout(() => { mapClickHandledRef.current = false; }, 50);
+        openProjectDetails(p);
+      })
+
+      return layer;
+    };
+
+    // ── CHUNKED RENDERING: process in batches of 60 per animation frame ──────
+    const CHUNK_SIZE = 60;
+    let cancelled = false;
+    // Store cancel fn in a ref so cleanup can stop in-flight renders
+    if (renderCancelRef.current) renderCancelRef.current();
+    renderCancelRef.current = () => { cancelled = true; };
+
+    const renderChunk = (startIdx) => {
+      if (cancelled) return;
+      const end = Math.min(startIdx + CHUNK_SIZE, filteredProjects.length);
+      for (let i = startIdx; i < end; i++) {
+        const p = filteredProjects[i];
+        if (!categoryGroupsRef.current[p.type]) {
+          categoryGroupsRef.current[p.type] = L.featureGroup();
+        }
+        const layer = buildLayer(p);
+        if (layer) {
+          categoryGroupsRef.current[p.type].addLayer(layer);
+        }
+      }
+
+      if (end < filteredProjects.length) {
+        // More chunks remain → yield to browser, then continue
+        requestAnimationFrame(() => renderChunk(end));
+      } else {
+        // All done → add groups to map in z-order
+        if (!cancelled) {
+          const GROUP_Z = {
+            'MBMC-VILLAGE-BOUNDARY': 1, 'MBMC-VILLAGES-SURVEY_No._BOUNDARY': 2,
+            'MBMC-ROAD': 3, 'MBMC-ROAD_CENTER_LINE': 4,
+            'MBMC-RESERVSTION-BOUNDARY': 8, 'MBMC-RESERVSTION': 10,
+          };
+          const sortedTypes = Object.keys(categoryGroupsRef.current).sort((a, b) => (GROUP_Z[a] || 5) - (GROUP_Z[b] || 5));
+          sortedTypes.forEach(type => {
+            if (isLayerVisible(type)) {
+              mainGroup.addLayer(categoryGroupsRef.current[type]);
+            }
+          });
+        }
+      }
+    };
+
+    // Kick off first chunk immediately
+    renderChunk(0);
+
+    return () => { cancelled = true; };
+  }, [projects, liveFilterActive, searchQuery, selectedResNames, selectedResNumbers, selectedSurveyNos, filterVillage, filterLandAcquired, filterMbmc712, filterCzmp, filterEncroachment]) // Only rebuild when data actually changes
 
   // REFACTORED: Instant toggle without rebuilding the world
   useEffect(() => {
@@ -5397,6 +5434,41 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
               {/* Modal Body */}
               <div style={{ padding: '20px', overflowY: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', flex: 1, minHeight: '350px' }}>
                 {(() => {
+                  if (previewFileStatus === 'loading') {
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', gap: '15px' }}>
+                        <div style={{ width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTopColor: '#1a73e8', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                        <span style={{ fontSize: '14px', color: '#64748b', fontWeight: '500' }}>Checking file availability...</span>
+                        <style>{`
+                          @keyframes spin {
+                            0% { transform: rotate(0deg); }
+                            100% { transform: rotate(360deg); }
+                          }
+                        `}</style>
+                      </div>
+                    );
+                  }
+
+                  if (previewFileStatus === 'missing') {
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', textAlign: 'center', background: '#fff', borderRadius: '12px', border: '1.5px dashed #cbd5e1', maxWidth: '480px', width: '100%', margin: '0 auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+                        <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: '1.5px solid #fef3c7' }}>
+                          <span style={{ fontSize: '26px' }}>⚠️</span>
+                        </div>
+                        <h3 style={{ fontSize: '16px', fontWeight: '700', color: '#1e293b', marginBottom: '8px', margin: 0 }}>Document Not Uploaded</h3>
+                        <p style={{ fontSize: '13px', color: '#64748b', lineHeight: '1.6', marginBottom: '20px', marginTop: '4px' }}>
+                          The requested file <strong>{previewFile.url.split('/').pop()}</strong> was not found on the server. The document checklist reference is present, but the physical file has not been uploaded yet.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
+                          <div style={{ fontSize: '10px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', textAlign: 'left', marginLeft: '4px' }}>File Path</div>
+                          <div style={{ fontSize: '11px', color: '#475569', background: '#f8fafc', padding: '10px 14px', borderRadius: '8px', fontFamily: 'monospace', wordBreak: 'break-all', textAlign: 'left', border: '1px solid #e2e8f0' }}>
+                            {previewFile.url}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
                   const isImg = /\.(jpg|jpeg|png|gif|webp|svg)($|\?)/i.test(previewFile.url);
                   if (isImg) {
                     return (
@@ -5426,25 +5498,46 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                 >
                   Close
                 </button>
-                <a 
-                  href={previewFile.url} 
-                  download={previewFile.name}
-                  style={{ 
-                    padding: '10px 20px', 
-                    background: '#10b981', 
-                    color: 'white', 
-                    borderRadius: '8px', 
-                    cursor: 'pointer', 
-                    fontWeight: 'bold', 
-                    fontSize: '13px', 
-                    textDecoration: 'none',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  ⬇️ Download File
-                </a>
+                {previewFileStatus === 'missing' ? (
+                  <button 
+                    disabled
+                    style={{ 
+                      padding: '10px 20px', 
+                      background: '#cbd5e1', 
+                      color: '#94a3b8', 
+                      borderRadius: '8px', 
+                      cursor: 'not-allowed', 
+                      fontWeight: 'bold', 
+                      fontSize: '13px',
+                      border: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    🚫 Download Unavailable
+                  </button>
+                ) : (
+                  <a 
+                    href={previewFile.url} 
+                    download={previewFile.name}
+                    style={{ 
+                      padding: '10px 20px', 
+                      background: '#10b981', 
+                      color: 'white', 
+                      borderRadius: '8px', 
+                      cursor: 'pointer', 
+                      fontWeight: 'bold', 
+                      fontSize: '13px', 
+                      textDecoration: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    ⬇️ Download File
+                  </a>
+                )}
               </div>
             </div>
           </div>
@@ -6292,6 +6385,84 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Map Layers Loading Overlay */}
+        {layersLoading && !selectedProject && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 800,
+            background: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '16px',
+            pointerEvents: 'all'
+          }}>
+            {/* Animated rings */}
+            <div style={{ position: 'relative', width: '64px', height: '64px' }}>
+              <div style={{
+                position: 'absolute', inset: 0,
+                border: '3px solid rgba(255,255,255,0.15)',
+                borderTopColor: '#3b82f6',
+                borderRadius: '50%',
+                animation: 'mapSpin 0.9s linear infinite'
+              }} />
+              <div style={{
+                position: 'absolute', inset: '10px',
+                border: '3px solid rgba(255,255,255,0.1)',
+                borderTopColor: '#60a5fa',
+                borderRadius: '50%',
+                animation: 'mapSpin 1.3s linear infinite reverse'
+              }} />
+              <div style={{
+                position: 'absolute', inset: '22px',
+                background: 'rgba(59,130,246,0.25)',
+                borderRadius: '50%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '14px'
+              }}>🗺️</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '15px', fontWeight: '700', color: 'white', marginBottom: '4px' }}>Loading Map Layers</div>
+              <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)' }}>Fetching project data from server...</div>
+            </div>
+            <style>{`
+              @keyframes mapSpin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+              }
+            `}</style>
+          </div>
+        )}
+
+        {/* Silent Refresh Badge (when cached data already shown) */}
+        {layersSilentRefresh && !layersLoading && !selectedProject && (
+          <div style={{
+            position: 'absolute',
+            bottom: '12px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 800,
+            background: 'rgba(15,23,42,0.8)',
+            color: 'white',
+            padding: '6px 14px',
+            borderRadius: '20px',
+            fontSize: '12px',
+            fontWeight: '600',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '7px',
+            backdropFilter: 'blur(8px)',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+            pointerEvents: 'none'
+          }}>
+            <div style={{ width: '10px', height: '10px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#60a5fa', borderRadius: '50%', animation: 'mapSpin 0.9s linear infinite', flexShrink: 0 }} />
+            Refreshing layers...
           </div>
         )}
 
