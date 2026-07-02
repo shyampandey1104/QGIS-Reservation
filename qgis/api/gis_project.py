@@ -639,19 +639,18 @@ def update_status(project_id, status, comment=None):
         })
         new_wo.insert(ignore_permissions=True)
         
-        doc.status = "Pending for Request"
-        doc.color = "#ea580c"
-        doc.remarks = comment or "Resubmitted after correction."
-        doc.save(ignore_permissions=True)
+        doc.db_set("status", "Pending for Request")
+        doc.db_set("color", "#ea580c")
+        doc.db_set("remarks", comment or "Resubmitted after correction.")
         frappe.cache().delete_keys("gis_projects_cache_")
         frappe.db.commit()
-        return {"id": project_id, "status": doc.status}
+        return {"id": project_id, "status": "Pending for Request"}
         
     # Correction workflow: assigns the work order back to the GIS Junior Engineer (requester)
     if status == "Correction":
-        doc.status = "Correction"
-        doc.remarks = comment or "Sent for Correction"
-        doc.save(ignore_permissions=True)
+        doc.db_set("status", "Correction")
+        doc.db_set("color", "#e11d48")
+        doc.db_set("remarks", comment or "Sent for Correction")
         
         latest_wo = frappe.get_all(
             "Initiate Work Order",
@@ -676,7 +675,7 @@ def update_status(project_id, status, comment=None):
             
         frappe.cache().delete_keys("gis_projects_cache_")
         frappe.db.commit()
-        return {"id": project_id, "status": doc.status}
+        return {"id": project_id, "status": "Correction"}
 
     # 1. Intermediate Approval Workflow (Level 1 -> Level 2 -> Level 3)
     if status == "Approved" and user_role in ["Executive Engineer", "City Engineer"]:
@@ -705,12 +704,11 @@ def update_status(project_id, status, comment=None):
         new_wo.insert(ignore_permissions=True)
         
         # Keep status as "Pending for Request" to remain active in the workflow queue
-        doc.status = "Pending for Request"
-        doc.remarks = comment or f"Approved by {user_role}"
-        doc.save(ignore_permissions=True)
+        doc.db_set("status", "Pending for Request")
+        doc.db_set("remarks", comment or f"Approved by {user_role}")
         frappe.cache().delete_keys("gis_projects_cache_")
         frappe.db.commit()
-        return {"id": project_id, "status": doc.status}
+        return {"id": project_id, "status": "Pending for Request"}
     
     # 2. Final Approval by Muncipal Commissioner transitions the status to "Approved"
     if status == "Approved" and user_role == "Muncipal Commissioner":
@@ -757,11 +755,10 @@ def update_status(project_id, status, comment=None):
             # Fall through to manual update
     
     # Fallback logic
-    doc.status = status
-    doc.save(ignore_permissions=True)
+    doc.db_set("status", status)
     frappe.cache().delete_keys("gis_projects_cache_")
     frappe.db.commit()
-    return {"id": project_id, "status": doc.status}
+    return {"id": project_id, "status": status}
 
 
 @frappe.whitelist()

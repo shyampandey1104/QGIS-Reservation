@@ -953,6 +953,7 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
           );
           const meta = layerMetaLookup[selectedProject.type] || LAYER_META[selectedProject.type] || {};
           const isProjectOrReservation = !isReferenceLayer || selectedProject.type === 'MBMC-RESERVSTION';
+          let color = '#1a73e8';
           if (isReferenceLayer && selectedProject.type !== 'MBMC-RESERVSTION') {
             color = meta.color || '#1a73e8';
           } else {
