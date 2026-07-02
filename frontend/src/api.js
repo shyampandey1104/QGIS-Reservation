@@ -321,3 +321,7 @@ export function fetchAllRegisteredTenants() {
   return call('get_all_registered_tenants')
 }
 
+export function fetchReportsData() {
+  return call('get_reports_data')
+}
+

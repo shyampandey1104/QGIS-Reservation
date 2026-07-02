@@ -1,17 +1,60 @@
-import React from 'react';
-import MBMC_STATS from '../data/mbmc_stats.json';
-import PAYMENT_DATA from '../data/payment_data.json';
-import RAW_DATA from '../data/property_records_data.json';
+import React, { useState, useEffect } from 'react';
+import { fetchReportsData } from '../api';
+import MBMC_STATS_STATIC from '../data/mbmc_stats.json';
+import PAYMENT_DATA_STATIC from '../data/payment_data.json';
+import RAW_DATA_STATIC from '../data/property_records_data.json';
 
 export default function ReservationReports({ userInfo }) {
+  const [loading, setLoading] = useState(true);
+  const [reportData, setReportData] = useState({
+    stats: {
+      total: MBMC_STATS_STATIC.total || 2483,
+      acquired: MBMC_STATS_STATIC.acquired || 503,
+      notAcquired: MBMC_STATS_STATIC.notAcquired || 1980,
+      encroachment: MBMC_STATS_STATIC.encroachment || 480,
+      villages: MBMC_STATS_STATIC.villages || {},
+      resTypes: MBMC_STATS_STATIC.resTypes || {}
+    },
+    projects: RAW_DATA_STATIC || [],
+    payments: PAYMENT_DATA_STATIC || []
+  });
+
+  useEffect(() => {
+    let active = true;
+    fetchReportsData()
+      .then(res => {
+        if (active && res && res.stats) {
+          const mergedStats = {
+            total: res.stats.total || MBMC_STATS_STATIC.total,
+            acquired: res.stats.acquired !== undefined ? res.stats.acquired : MBMC_STATS_STATIC.acquired,
+            notAcquired: res.stats.notAcquired !== undefined ? res.stats.notAcquired : MBMC_STATS_STATIC.notAcquired,
+            encroachment: res.stats.encroachment !== undefined ? res.stats.encroachment : MBMC_STATS_STATIC.encroachment,
+            villages: (res.stats.villages && Object.keys(res.stats.villages).length > 0) ? res.stats.villages : MBMC_STATS_STATIC.villages,
+            resTypes: (res.stats.resTypes && Object.keys(res.stats.resTypes).length > 0) ? res.stats.resTypes : MBMC_STATS_STATIC.resTypes
+          };
+          setReportData({
+            stats: mergedStats,
+            projects: (res.projects && res.projects.length > 0) ? res.projects : RAW_DATA_STATIC,
+            payments: (res.payments && res.payments.length > 0) ? res.payments : PAYMENT_DATA_STATIC
+          });
+          setLoading(false);
+        }
+      })
+      .catch(err => {
+        console.error("Failed to fetch reports data:", err);
+        setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
   const months = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'];
   
-  // Calculate Collection Trend from PAYMENT_DATA dynamically
+  // Calculate Collection Trend from dynamic payments
   const monthMap = { '04':0, '05':1, '06':2, '07':3, '08':4, '09':5 };
   const dVals = [0, 0, 0, 0, 0, 0];
   const cVals = [0, 0, 0, 0, 0, 0];
   
-  (PAYMENT_DATA || []).forEach(p => {
+  (reportData.payments || []).forEach(p => {
     if (!p.due_date) return;
     const parts = p.due_date.split('-');
     if (parts.length < 2) return;
@@ -33,10 +76,10 @@ export default function ReservationReports({ userInfo }) {
   const maxB = 100;
 
   // Real data
-  const total     = MBMC_STATS.total || 2483;
-  const acquired  = MBMC_STATS.acquired || 503;
-  const notAcq    = MBMC_STATS.notAcquired || 1980;
-  const encroach  = MBMC_STATS.encroachment || 480;
+  const total     = reportData.stats.total || 2483;
+  const acquired  = reportData.stats.acquired || 503;
+  const notAcq    = reportData.stats.notAcquired || 1980;
+  const encroach  = reportData.stats.encroachment || 480;
 
   const sumValues = acquired + notAcq + encroach || 1;
   const acqP = (acquired / sumValues) * 100;
@@ -47,13 +90,13 @@ export default function ReservationReports({ userInfo }) {
   const realNotAcqPct = total ? ((notAcq / total) * 100).toFixed(1) : 0;
 
 
-  const villageEntries = Object.entries(MBMC_STATS.villages || {})
+  const villageEntries = Object.entries(reportData.stats.villages || {})
     .filter(([k]) => k)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8);
   const maxVillage = villageEntries[0]?.[1] || 1;
 
-  const resTypeEntries = Object.entries(MBMC_STATS.resTypes || {})
+  const resTypeEntries = Object.entries(reportData.stats.resTypes || {})
     .filter(([k]) => k)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6);
@@ -74,7 +117,7 @@ export default function ReservationReports({ userInfo }) {
 
     if (reportName === 'Property status report' || reportName === 'All Reservations list') {
       headers = ['GIS ID', 'Reservation No', 'Reservation Name', 'Village', 'Survey No', 'Status', 'Area (sqm)', 'Ownership'];
-      rows = (RAW_DATA || []).map(p => [
+      rows = (reportData.projects || []).map(p => [
         p.id || '',
         p.reservationNo || '',
         (p.propertyName || '').replace(/,/g, ' '),
@@ -86,7 +129,7 @@ export default function ReservationReports({ userInfo }) {
       ]);
     } else if (reportName === 'Tenant payment history') {
       headers = ['Invoice ID', 'GIS ID', 'Reservation Name', 'Village', 'Survey No', 'Year', 'Annual Amount', 'Paid Date', 'Txn ID', 'Status', 'Payment Mode'];
-      rows = (PAYMENT_DATA || []).map(p => [
+      rows = (reportData.payments || []).map(p => [
         p.invoice_id,
         p.gis_id,
         (p.reservation_name || '').replace(/,/g, ' '),
@@ -101,7 +144,7 @@ export default function ReservationReports({ userInfo }) {
       ]);
     } else if (reportName === 'Yearly demand collection pending') {
       headers = ['Invoice ID', 'GIS ID', 'Reservation Name', 'Village', 'Survey No', 'Year', 'Annual Amount', 'Due Date', 'Status'];
-      rows = (PAYMENT_DATA || []).filter(p => p.status !== 'paid').map(p => [
+      rows = (reportData.payments || []).filter(p => p.status !== 'paid').map(p => [
         p.invoice_id,
         p.gis_id,
         (p.reservation_name || '').replace(/,/g, ' '),
@@ -115,23 +158,23 @@ export default function ReservationReports({ userInfo }) {
     } else if (reportName === 'Area wise property count') {
       headers = ['Village', 'Total Properties', 'Acquired', 'Not Acquired', 'Encroachment', 'Partial'];
       const map = {};
-      (RAW_DATA || []).forEach(p => {
+      (reportData.projects || []).forEach(p => {
         const v = p.village || 'Unknown';
         if (!map[v]) map[v] = { total: 0, acquired: 0, notAcq: 0, encroach: 0, partial: 0 };
         map[v].total++;
-        if (p.status === 'Acquired') map[v].acquired++;
-        else if (p.status === 'Not Acquired') map[v].notAcq++;
-        else if (p.status === 'Encroachment') map[v].encroach++;
-        else if (p.status === 'Partial') map[v].partial++;
+        if (p.landStatus === 'Acquired') map[v].acquired++;
+        else if (p.landStatus === 'Not Acquired') map[v].notAcq++;
+        else if (p.landStatus === 'Encroachment') map[v].encroach++;
+        else if (p.landStatus === 'Partial') map[v].partial++;
       });
       rows = Object.entries(map).map(([v, s]) => [v, s.total, s.acquired, s.notAcq, s.encroach, s.partial]);
     } else if (reportName === 'Ownership history report') {
       headers = ['GIS ID', 'Village', 'Survey No', 'Ownership', '7/12 Name', 'Status'];
-      rows = (RAW_DATA || []).map(p => [
+      rows = (reportData.projects || []).map(p => [
         p.id || '',
         p.village || '',
         p.surveyNo || '',
-        p.ownership || '',
+        p.mbmc712 || '',
         (p.mbmc712 || '').replace(/,/g, ' '),
         p.status || ''
       ]);
@@ -148,7 +191,6 @@ export default function ReservationReports({ userInfo }) {
       link.click();
       document.body.removeChild(link);
     } else if (format === 'PDF') {
-      // Create a printable HTML table and open it in a new tab for printing as PDF
       const tableRows = rows.map(r => `<tr>${r.map(c => `<td style="padding:8px; border:1px solid #ddd;">${c}</td>`).join('')}</tr>`).join('');
       const tableHeaders = `<tr>${headers.map(h => `<th style="padding:8px; border:1px solid #ddd; background:#f4f6f9; text-align:left;">${h}</th>`).join('')}</tr>`;
       

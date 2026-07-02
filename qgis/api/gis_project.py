@@ -2519,6 +2519,118 @@ def run_overlap_test(project_id="GIS-PROJ-05944"):
     return res_list
 
 
+@frappe.whitelist(allow_guest=True)
+def get_reports_data():
+    # 1. Fetch all reservation projects from the database
+    projects = frappe.get_all(
+        "GIS Project",
+        filters={"project_type": ["in", ["MBMC-RESERVSTION", "MBMC-RESERVSTION-BOUNDARY"]]},
+        fields=[
+            "name", "project_name", "reservation_number", "reservation_name", 
+            "village_name", "new_survey_no_hissa_no", "old_survey_no_hissa_no",
+            "land_acquired_status", "encroachment_status", "mbmc_7_12", "road_length"
+        ],
+        ignore_permissions=True
+    )
+
+    # 2. Base counts
+    total = len(projects)
+    acquired = sum(1 for p in projects if p.get("land_acquired_status") == "ACQUIRED")
+    not_acquired = sum(1 for p in projects if p.get("land_acquired_status") == "NOT_ACQUIRED")
+    encroachment = sum(1 for p in projects if p.get("encroachment_status") == "ENCROACHMENT")
+
+    # 3. Village-wise count
+    villages_map = {}
+    for p in projects:
+        v = p.get("village_name")
+        if v:
+            v_clean = v.strip().upper()
+            villages_map[v_clean] = villages_map.get(v_clean, 0) + 1
+    
+    # 4. Top Reservation Types
+    res_types_map = {}
+    for p in projects:
+        rt = p.get("reservation_name") or p.get("project_name")
+        if rt:
+            rt_clean = rt.strip().upper()
+            res_types_map[rt_clean] = res_types_map.get(rt_clean, 0) + 1
+
+    # 5. Fetch all registered tenants
+    tenants = frappe.get_all(
+        "Register Tenant",
+        fields=["name", "tenant_name", "rent_amount", "status", "property_id", "creation"],
+        ignore_permissions=True
+    )
+
+    # Prepare project list for export and details
+    raw_projects = []
+    for p in projects:
+        # Resolve survey number
+        s_no = p.get("new_survey_no_hissa_no") or p.get("old_survey_no_hissa_no") or "-"
+        # Resolve area
+        area = p.get("road_length") or "-"
+        
+        raw_projects.append({
+            "id": p.get("name"),
+            "surveyNo": s_no,
+            "reservationNo": p.get("reservation_number") or "-",
+            "propertyName": p.get("reservation_name") or p.get("project_name") or "-",
+            "village": p.get("village_name") or "-",
+            "landStatus": p.get("land_acquired_status") or "NOT_ACQUIRED",
+            "encroachment": p.get("encroachment_status") or "NA",
+            "mbmc712": p.get("mbmc_7_12") or "-",
+            "area": area
+        })
+
+    # Prepare tenant payments for collection trend
+    raw_payments = []
+    for t in tenants:
+        p_name = "-"
+        p_village = "-"
+        p_survey = "-"
+        if t.get("property_id"):
+            match = next((p for p in projects if p.get("name") == t.get("property_id")), None)
+            if match:
+                p_name = match.get("reservation_name") or match.get("project_name") or "-"
+                p_village = match.get("village_name") or "-"
+                p_survey = match.get("new_survey_no_hissa_no") or match.get("old_survey_no_hissa_no") or "-"
+        
+        created_year = 2026
+        if t.get("creation"):
+            try:
+                created_year = t.get("creation").year
+            except:
+                pass
+                
+        raw_payments.append({
+            "invoice_id": f"INV-{t.get('name').split('-')[-1]}",
+            "gis_id": t.get("property_id") or "-",
+            "reservation_name": p_name,
+            "village": p_village,
+            "survey_no": p_survey,
+            "year": created_year,
+            "annual_amount": float(t.get("rent_amount") or 0),
+            "due_date": t.get("creation").strftime("%d-%m-%Y") if t.get("creation") else "01-04-2026",
+            "paid_date": t.get("creation").strftime("%d-%m-%Y") if t.get("creation") and t.get("status") == "Active" else "",
+            "txn_id": f"TXN{t.get('name').split('-')[-1]}",
+            "status": "paid" if t.get("status") == "Active" else "pending",
+            "payment_mode": "Online" if t.get("status") == "Active" else ""
+        })
+
+    return {
+        "stats": {
+            "total": total,
+            "acquired": acquired,
+            "notAcquired": not_acquired,
+            "encroachment": encroachment,
+            "villages": villages_map,
+            "resTypes": res_types_map
+        },
+        "projects": raw_projects,
+        "payments": raw_payments
+    }
+
+
 
 
 
