@@ -2120,12 +2120,13 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
           const featurePane = PANE_MAP[p.type] || undefined;
           const isBuildingInfo = p.type === 'BUILDING_INFO' || p.type === 'building_info';
           layer = L.polygon(p.coordinates, {
-            color: isBuildingInfo ? '#dc2626' : color,
-            fillColor: isBuildingInfo ? 'url(#redBuildingHatch)' : color,
+            color: isBuildingInfo ? '#ef4444' : color,
+            fillColor: isBuildingInfo ? '#fca5a5' : color,
             fill: shouldFill,
-            fillOpacity: isBuildingInfo ? 0.9 : (shouldFill ? fillOpacity : 0),
-            weight: isBuildingInfo ? 1.5 : layerWeight,
-            renderer: isBuildingInfo ? svgRendererRef.current : undefined,
+            fillOpacity: isBuildingInfo ? 0.35 : (shouldFill ? fillOpacity : 0),
+            weight: isBuildingInfo ? 1.2 : layerWeight,
+            // Render building info features on Canvas to avoid DOM overhead of 2,700+ SVG nodes
+            renderer: undefined,
             ...(featurePane ? { pane: featurePane } : {})
           })
         }
@@ -2205,16 +2206,38 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                          isReservationLayer  ? 'resnum-map-label' :
                          isBuildingLayer     ? 'building-map-label' : '';
 
-      layer.bindTooltip(displayName, {
-        permanent: showPermanentLabel,
-        sticky: !showPermanentLabel,
-        direction: 'center',
-        className: labelClass
-      }).on('click', (e) => {
+      // Cache metadata directly on the layer object for dynamic zoom binding/unbinding
+      layer.displayName = displayName;
+      layer.labelClass = labelClass;
+      layer.layerType = p.type;
+      layer.showPermanentLabel = showPermanentLabel;
+
+      if (displayName) {
+        // Only bind as permanent initially if the map's current zoom is above the threshold
+        const currentMapZoom = mapInstanceRef.current?.getZoom() || 12;
+        const shouldBePermanent = (type, zoom) => {
+          if (type === 'MBMC-VILLAGE-BOUNDARY') return true;
+          if (type === 'MBMC-VILLAGES-SURVEY_No._BOUNDARY') return zoom >= 15;
+          if (type === 'MBMC-RESERVSTION-BOUNDARY' || type === 'MBMC-RESERVSTION') return zoom >= 16;
+          if (type === 'BUILDING_INFO' || type === 'building_info') return zoom >= 17;
+          return false;
+        };
+
+        const isPermanentNow = showPermanentLabel && shouldBePermanent(p.type, currentMapZoom);
+
+        layer.bindTooltip(displayName, {
+          permanent: isPermanentNow,
+          sticky: !isPermanentNow,
+          direction: 'center',
+          className: labelClass
+        });
+      }
+
+      layer.on('click', (e) => {
         mapClickHandledRef.current = true;
         setTimeout(() => { mapClickHandledRef.current = false; }, 50);
         openProjectDetails(p);
-      })
+      });
 
       return layer;
     };
@@ -2294,6 +2317,49 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
       }
     })
   }, [layerVisibility])
+
+  // Dynamically update tooltip permanence based on zoom level to keep DOM lightweight
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const zoom = currentZoom;
+
+    // Helper to determine if label should be permanent at this zoom level
+    const shouldBePermanent = (type) => {
+      if (type === 'MBMC-VILLAGE-BOUNDARY') return true;
+      if (type === 'MBMC-VILLAGES-SURVEY_No._BOUNDARY') return zoom >= 15;
+      if (type === 'MBMC-RESERVSTION-BOUNDARY' || type === 'MBMC-RESERVSTION') return zoom >= 16;
+      if (type === 'BUILDING_INFO' || type === 'building_info') return zoom >= 17;
+      return false;
+    };
+
+    // Iterate through all active layers in categoryGroupsRef
+    Object.keys(categoryGroupsRef.current).forEach(type => {
+      const group = categoryGroupsRef.current[type];
+      if (!group) return;
+
+      const targetPermanent = shouldBePermanent(type);
+
+      group.eachLayer(layer => {
+        // Skip layers that don't have tooltips or don't support permanent labels
+        if (!layer.displayName || layer.showPermanentLabel === false) return;
+
+        const tooltip = layer.getTooltip();
+        const currentIsPermanent = tooltip && tooltip.options.permanent;
+
+        if (currentIsPermanent !== targetPermanent) {
+          // Re-bind tooltip with updated options
+          layer.unbindTooltip().bindTooltip(layer.displayName, {
+            permanent: targetPermanent,
+            sticky: !targetPermanent,
+            direction: 'center',
+            className: layer.labelClass
+          });
+        }
+      });
+    });
+  }, [currentZoom]);
 
   const handleSave = async (e) => {
     e.preventDefault()
