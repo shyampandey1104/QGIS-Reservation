@@ -3133,8 +3133,27 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
 
             {/* Tab Contents */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              
-              {/* TAB 1: Layers */}
+              {layersLoading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '220px', gap: '12px', color: '#64748b' }}>
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    border: '3px solid #f1f5f9',
+                    borderTop: '3px solid #1a73e8',
+                    borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite',
+                  }} />
+                  <span style={{ fontSize: '13px', fontWeight: '600' }}>Loading data...</span>
+                  <style>{`
+                    @keyframes spin {
+                      0% { transform: rotate(0deg); }
+                      100% { transform: rotate(360deg); }
+                    }
+                  `}</style>
+                </div>
+              ) : (
+                <>
+                  {/* TAB 1: Layers */}
               {activeMapTab === 'layers' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {/* Layer Quick Actions */}
@@ -3989,7 +4008,8 @@ export default function GISMap({ userInfo, requestTrigger, liveFilterActive, set
                   )}
                 </div>
               )}
-
+                </>
+              )}
             </div>
           </div>
         )}
